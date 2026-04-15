@@ -122,9 +122,6 @@ export default function Home() {
       <header className="border-b px-6 py-3 flex items-center justify-between shrink-0">
         <div>
           <h1 className="text-xl font-bold tracking-tight">Bucket Grading Playground</h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Configure bucket rules, load students, and explore distributions
-          </p>
         </div>
         <Button variant="outline" size="sm" onClick={handleReset} className="text-xs">
           Reset All
