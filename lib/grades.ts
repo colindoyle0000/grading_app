@@ -38,7 +38,7 @@ export const DEFAULT_BUCKETS: GradeBucket[] = [
   { grade: "C",  minPct: 5,    maxPct: 10 },
   { grade: "C-", minPct: 0,    maxPct: 0  },
   { grade: "D+", minPct: 0,    maxPct: 0  },
-  { grade: "D",  minPct: 0,    maxPct: 5  },
+  { grade: "D",  minPct: 0,    maxPct: 0  },
   { grade: "D-", minPct: 0,    maxPct: 0  },
-  { grade: "F",  minPct: 0,    maxPct: 5  },
+  { grade: "F",  minPct: 0,    maxPct: 0  },
 ];

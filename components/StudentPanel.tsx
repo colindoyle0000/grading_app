@@ -12,6 +12,7 @@ interface Props {
   buckets: GradeBucket[];
   activePreset: DistributionPreset | null;
   onStudentsChange: (students: Student[]) => void;
+  onLoadStudents: (students: Student[]) => void;
   onGradeChange: (studentIdx: number, grade: string) => void;
 }
 
@@ -31,6 +32,7 @@ export function StudentPanel({
   buckets,
   activePreset,
   onStudentsChange,
+  onLoadStudents,
   onGradeChange,
 }: Props) {
   const [tab, setTab] = useState<Tab>("upload");
@@ -49,7 +51,7 @@ export function StudentPanel({
         return;
       }
       setUploadName(`${file.name} (${parsed.length} students)`);
-      onStudentsChange(parsed);
+      onLoadStudents(parsed);
       setTab("list");
     } catch {
       setUploadError("Could not parse file. Please use .xlsx, .xls, or .csv.");
@@ -73,7 +75,7 @@ export function StudentPanel({
         assignedGrade: null,
       }));
     if (valid.length === 0) return;
-    onStudentsChange(rankStudents(valid));
+    onLoadStudents(rankStudents(valid));
     setTab("list");
   }
 

@@ -15,7 +15,6 @@ const MB = 40;   // margin bottom (X-axis labels)
 const CHART_W = SVG_W - ML - MR;       // 935
 const CHART_H = SVG_H - MT - MB;       // 440
 const CHART_BOTTOM = MT + CHART_H;     // 460
-const COL_W = CHART_W / 13;            // ~71.9 px per column
 const R = 7;                           // circle radius (normal)
 const R_HOVER = 9;                     // circle radius (hovered)
 const V_UNIT = 17;                     // vertical spacing per circle (2R + 3px gap)
@@ -23,10 +22,6 @@ const V_UNIT = 17;                     // vertical spacing per circle (2R + 3px 
 // Animation timing
 const ANIM_DUR = 160;   // ms — position transition duration
 const STAGGER = 30;     // ms — extra delay per circle in the arriving group
-
-function colCenterX(i: number): number {
-  return ML + (i + 0.5) * COL_W;
-}
 
 function circleY(circleIdxFromBottom: number): number {
   return CHART_BOTTOM - R - circleIdxFromBottom * V_UNIT;
@@ -36,7 +31,7 @@ function barH(count: number): number {
   return count * V_UNIT;
 }
 
-// ─── SVG coordinate helpers ───────────────────────────────────────────────────
+// ─── SVG coordinate helper ────────────────────────────────────────────────────
 function clientToSVG(
   svg: SVGSVGElement,
   clientX: number,
@@ -47,10 +42,6 @@ function clientToSVG(
     x: clientX * m.a + clientY * m.c + m.e,
     y: clientX * m.b + clientY * m.d + m.f,
   };
-}
-
-function colIdxFromSVGX(svgX: number): number {
-  return Math.max(0, Math.min(12, Math.floor((svgX - ML) / COL_W)));
 }
 
 // ─── Core drag logic (pure function) ─────────────────────────────────────────
@@ -103,6 +94,7 @@ function applyDrag(
 }
 
 // ─── Drag state ───────────────────────────────────────────────────────────────
+// All indices in drag state are grade-scale indices (0–12), not visual-column indices.
 type DragState = {
   srcGradeIdx: number;
   circleIdxFromBottom: number;
@@ -144,9 +136,32 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
       .sort((a, b) => a.rank - b.rank),
   );
 
-  // Constraints for bar heights
+  // Full constraints (indexed parallel to GRADE_SCALE)
   const N = students.length;
   const constraints = buildConstraints(buckets, N);
+
+  // ── Visible columns: only grades with maxCount > 0 ─────────────────────────
+  // visibleGradeIndices[visCol] = grade-scale index
+  const visibleGradeIndices: number[] = constraints
+    .map((c, i) => ({ c, i }))
+    .filter(({ c }) => c.maxCount > 0)
+    .map(({ i }) => i);
+
+  const numCols = visibleGradeIndices.length || 1;
+  const COL_W = CHART_W / numCols;
+
+  // grade-scale index → visual column index (-1 if not visible)
+  const gradeToVisCol = new Map<number, number>();
+  visibleGradeIndices.forEach((gradeIdx, visCol) => gradeToVisCol.set(gradeIdx, visCol));
+
+  function colCenterX(visCol: number): number {
+    return ML + (visCol + 0.5) * COL_W;
+  }
+
+  // SVG x → visual column index (clamped)
+  function visColFromSVGX(svgX: number): number {
+    return Math.max(0, Math.min(numCols - 1, Math.floor((svgX - ML) / COL_W)));
+  }
 
   // ── Derive moving set ───────────────────────────────────────────────────────
   const movingIds = new Set<string>();
@@ -158,21 +173,16 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
   }
 
   // delayMap: studentId → extra transition-delay ms (only for moving circles)
-  // In both directions: worst-ranked mover (highest rank number) arrives first (delay 0).
-  // This creates the desired one-by-one cascade effect:
-  //   LEFT (better grade): worst-of-movers lands at bottom of dest first, bumping others up
-  //   RIGHT (worse grade): worst-of-movers flies to top of dest first, filling downward
+  // Worst-ranked mover (highest rank number) arrives first (delay 0) in both directions.
   const delayMap = new Map<string, number>();
   if (drag && movingIds.size > 0) {
     const movingStudents = [...movingIds]
       .map((id) => displayStudents.find((s) => s.id === id))
       .filter((s): s is Student => s !== undefined)
-      .sort((a, b) => a.rank - b.rank); // index 0 = best rank (lowest rank number)
+      .sort((a, b) => a.rank - b.rank); // index 0 = best rank
 
     movingStudents.forEach((s, sortedIdx) => {
       const n = movingStudents.length;
-      // sortedIdx 0 = best rank → highest delay (arrives last)
-      // sortedIdx n-1 = worst rank → delay 0 (arrives first)
       const delay = (n - 1 - sortedIdx) * STAGGER;
       delayMap.set(s.id, delay);
     });
@@ -199,16 +209,17 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
   function handleSVGPointerMove(e: React.PointerEvent<SVGSVGElement>) {
     if (!drag || !svgRef.current) return;
     const { x: svgX } = clientToSVG(svgRef.current, e.clientX, e.clientY);
-    const dstIdx = colIdxFromSVGX(svgX);
-    if (dstIdx === drag.currentGradeIdx) return;
+    // Convert SVG-x → visible column → grade-scale index
+    const dstGradeIdx = visibleGradeIndices[visColFromSVGX(svgX)];
+    if (dstGradeIdx === drag.currentGradeIdx) return;
 
     const preview = applyDrag(
       drag.originalStudents,
       drag.srcGradeIdx,
-      dstIdx,
+      dstGradeIdx,
       drag.circleIdxFromBottom,
     );
-    setDrag({ ...drag, currentGradeIdx: dstIdx, previewStudents: preview });
+    setDrag({ ...drag, currentGradeIdx: dstGradeIdx, previewStudents: preview });
   }
 
   function handleSVGPointerUp() {
@@ -233,7 +244,8 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
   }
 
   // ── Y-axis ticks ────────────────────────────────────────────────────────────
-  const maxCount = Math.max(...constraints.map((c) => c.maxCount), 5);
+  const visibleMaxCounts = visibleGradeIndices.map((i) => constraints[i].maxCount);
+  const maxCount = Math.max(...visibleMaxCounts, 5);
   const tickStep = maxCount <= 10 ? 2 : maxCount <= 20 ? 5 : 10;
   const ticks: number[] = [];
   for (let v = 0; v <= maxCount + tickStep; v += tickStep) ticks.push(v);
@@ -243,7 +255,7 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
   return (
     <div>
       {/* Legend + drag hint */}
-      <div className="flex items-center gap-5 px-1 py-1.5 border-b mb-0 bg-muted/30 text-xs text-muted-foreground">
+      <div className="flex items-center gap-5 px-1 py-1.5 border-b bg-muted/30 text-xs text-muted-foreground">
         <div className="flex items-center gap-1.5">
           <svg width="13" height="13" className="shrink-0">
             <rect x="1" y="1" width="11" height="11" fill="#d1d5db" />
@@ -285,13 +297,14 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
           onPointerCancel={handleSVGPointerCancel}
         >
           {/* ── Layer 1: Min bars (grey fill, no stroke) ── */}
-          {constraints.map((c, i) => {
+          {visibleGradeIndices.map((gradeIdx, visCol) => {
+            const c = constraints[gradeIdx];
             if (c.minCount === 0) return null;
             const h = barH(c.minCount);
             return (
               <rect
                 key={`min-${c.grade}`}
-                x={colCenterX(i) - COL_W * 0.38}
+                x={colCenterX(visCol) - COL_W * 0.38}
                 y={CHART_BOTTOM - h}
                 width={COL_W * 0.76}
                 height={h}
@@ -303,13 +316,13 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
           })}
 
           {/* ── Layer 2: Max bars (black stroke, no fill) ── */}
-          {constraints.map((c, i) => {
-            if (c.maxCount === 0) return null;
+          {visibleGradeIndices.map((gradeIdx, visCol) => {
+            const c = constraints[gradeIdx];
             const h = barH(c.maxCount);
             return (
               <rect
                 key={`max-${c.grade}`}
-                x={colCenterX(i) - COL_W * 0.38}
+                x={colCenterX(visCol) - COL_W * 0.38}
                 y={CHART_BOTTOM - h}
                 width={COL_W * 0.76}
                 height={h}
@@ -322,35 +335,41 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
           })}
 
           {/* ── Layer 3: Column highlight during drag ── */}
-          {drag && drag.currentGradeIdx !== drag.srcGradeIdx && (
-            <rect
-              x={colCenterX(drag.currentGradeIdx) - COL_W * 0.45}
-              y={MT}
-              width={COL_W * 0.9}
-              height={CHART_H}
-              fill="#dbeafe"
-              opacity={0.4}
-              pointerEvents="none"
-            />
-          )}
+          {drag && drag.currentGradeIdx !== drag.srcGradeIdx && (() => {
+            const visCol = gradeToVisCol.get(drag.currentGradeIdx);
+            if (visCol === undefined) return null;
+            return (
+              <rect
+                x={colCenterX(visCol) - COL_W * 0.45}
+                y={MT}
+                width={COL_W * 0.9}
+                height={CHART_H}
+                fill="#dbeafe"
+                opacity={0.4}
+                pointerEvents="none"
+              />
+            );
+          })()}
 
           {/* ── Layer 4: Student circles ──────────────────────────────────────
-              Rendered in a FLAT array sorted by rank so React always reuses the
-              same DOM element for each student (same key = same node = CSS
-              transitions on cx/cy fire when the student moves columns).       */}
+              Flat array sorted by rank — same key = same DOM node = CSS
+              transitions on cx/cy fire reliably when a student changes columns.
+              Circles for grades with maxCount=0 (hidden columns) are skipped.  */}
           {displayStudents
             .filter((s) => s.assignedGrade !== null)
             .sort((a, b) => a.rank - b.rank)
             .map((student) => {
               const gradeIdx = gradeScaleArr.indexOf(student.assignedGrade!);
               if (gradeIdx < 0) return null;
+              const visCol = gradeToVisCol.get(gradeIdx);
+              if (visCol === undefined) return null; // grade column is hidden
 
               const col = columnStudents[gradeIdx];
               const idxInCol = col.findIndex((s) => s.id === student.id);
               if (idxInCol < 0) return null;
               const idxFromBottom = col.length - 1 - idxInCol;
 
-              const cx = colCenterX(gradeIdx);
+              const cx = colCenterX(visCol);
               const cy = circleY(idxFromBottom);
 
               const isMoving = movingIds.has(student.id);
@@ -432,14 +451,16 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
             );
           })}
 
-          {/* ── Layer 6: X-axis grade labels ── */}
-          {gradeScaleArr.map((grade, i) => {
+          {/* ── Layer 6: X-axis grade labels (visible columns only) ── */}
+          {visibleGradeIndices.map((gradeIdx, visCol) => {
+            const grade = gradeScaleArr[gradeIdx];
             const active =
-              drag && (i === drag.srcGradeIdx || i === drag.currentGradeIdx);
+              drag &&
+              (gradeIdx === drag.srcGradeIdx || gradeIdx === drag.currentGradeIdx);
             return (
               <text
                 key={grade}
-                x={colCenterX(i)}
+                x={colCenterX(visCol)}
                 y={SVG_H - 8}
                 textAnchor="middle"
                 fontSize={11}

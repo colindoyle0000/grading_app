@@ -35,11 +35,29 @@ const DISTRIBUTORS: Record<DistributionPreset, typeof distributeGenerous> = {
 
 export default function Home() {
   const [buckets, setBuckets] = useState<GradeBucket[]>(DEFAULT_BUCKETS);
-  const [students, setStudents] = useState<Student[]>(makeDefaultStudents);
-  const [activePreset, setActivePreset] = useState<DistributionPreset | null>(null);
+  const [students, setStudents] = useState<Student[]>(() =>
+    distributeSpread(makeDefaultStudents(), DEFAULT_BUCKETS),
+  );
+  const [activePreset, setActivePreset] = useState<DistributionPreset | null>("spread");
 
   const isFeasible = validateBuckets(buckets).length === 0;
 
+  // Called when new students are loaded (file upload / manual entry).
+  // Auto-applies the spread preset so the chart is immediately populated.
+  const handleLoadStudents = useCallback(
+    (newStudents: Student[]) => {
+      if (validateBuckets(buckets).length === 0) {
+        setStudents(distributeSpread(newStudents, buckets));
+        setActivePreset("spread");
+      } else {
+        setStudents(newStudents);
+        setActivePreset(null);
+      }
+    },
+    [buckets],
+  );
+
+  // Called when grades change via drag in the bar chart — no preset reset.
   const handleStudentsChange = useCallback((newStudents: Student[]) => {
     setStudents(newStudents);
     setActivePreset(null);
@@ -93,9 +111,9 @@ export default function Home() {
   }, []);
 
   const handleReset = useCallback(() => {
-    setStudents(makeDefaultStudents());
     setBuckets(DEFAULT_BUCKETS);
-    setActivePreset(null);
+    setStudents(distributeSpread(makeDefaultStudents(), DEFAULT_BUCKETS));
+    setActivePreset("spread");
   }, []);
 
   return (
@@ -144,6 +162,7 @@ export default function Home() {
             buckets={buckets}
             activePreset={activePreset}
             onStudentsChange={handleStudentsChange}
+            onLoadStudents={handleLoadStudents}
             onGradeChange={handleGradeChange}
           />
         </main>
