@@ -1,65 +1,165 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useCallback } from "react";
+import { Student, GradeBucket, DistributionPreset } from "@/types";
+import { DEFAULT_BUCKETS, GRADE_SCALE } from "@/lib/grades";
+import {
+  distributeGenerous,
+  distributeStingy,
+  distributeCondensed,
+  distributeSpread,
+  validateBuckets,
+} from "@/lib/algorithms";
+import { rankStudents } from "@/lib/excelParser";
+import { BucketRules } from "@/components/BucketRules";
+import { StudentPanel } from "@/components/StudentPanel";
+import { DistributionPanel } from "@/components/DistributionPanel";
+import { Button } from "@/components/ui/button";
+
+function makeDefaultStudents(): Student[] {
+  const raw = Array.from({ length: 100 }, (_, i) => ({
+    id: `ID${i + 1}`,
+    rawScore: 100 - i * 0.5,
+    rank: 0,
+    assignedGrade: null,
+  }));
+  return rankStudents(raw);
+}
+
+const DISTRIBUTORS: Record<DistributionPreset, typeof distributeGenerous> = {
+  generous: distributeGenerous,
+  stingy: distributeStingy,
+  condensed: distributeCondensed,
+  spread: distributeSpread,
+};
 
 export default function Home() {
+  const [buckets, setBuckets] = useState<GradeBucket[]>(DEFAULT_BUCKETS);
+  const [students, setStudents] = useState<Student[]>(makeDefaultStudents);
+  const [activePreset, setActivePreset] = useState<DistributionPreset | null>(null);
+
+  const isFeasible = validateBuckets(buckets).length === 0;
+
+  const handleStudentsChange = useCallback((newStudents: Student[]) => {
+    setStudents(newStudents);
+    setActivePreset(null);
+  }, []);
+
+  const handleBucketsChange = useCallback(
+    (newBuckets: GradeBucket[]) => {
+      setBuckets(newBuckets);
+      if (activePreset && students.length > 0 && validateBuckets(newBuckets).length === 0) {
+        const updated = DISTRIBUTORS[activePreset](students, newBuckets);
+        setStudents(updated);
+      }
+    },
+    [activePreset, students],
+  );
+
+  const handlePreset = useCallback(
+    (preset: DistributionPreset) => {
+      if (students.length === 0 || !isFeasible) return;
+      const updated = DISTRIBUTORS[preset](students, buckets);
+      setStudents(updated);
+      setActivePreset(preset);
+    },
+    [students, buckets, isFeasible],
+  );
+
+  // Grade change with rank-order cascade:
+  // Changing student at studentIdx to `grade` forces all rank-violating students
+  // to the same grade, preserving the invariant: better rank ⟹ equal-or-better grade.
+  const handleGradeChange = useCallback((studentIdx: number, grade: string) => {
+    setStudents((prev) => {
+      const gradeScaleArr: string[] = Array.from(GRADE_SCALE);
+      const changedStudent = prev[studentIdx];
+      const newGradeIdx = gradeScaleArr.indexOf(grade);
+      return prev.map((s, i) => {
+        if (i === studentIdx) return { ...s, assignedGrade: grade };
+        if (s.assignedGrade === null) return s;
+        const curGradeIdx = gradeScaleArr.indexOf(s.assignedGrade);
+        // Better student (lower rank number) must have grade at least as good (lower gradeIdx)
+        if (s.rank < changedStudent.rank && curGradeIdx > newGradeIdx) {
+          return { ...s, assignedGrade: grade };
+        }
+        // Worse student (higher rank number) must have grade no better (higher or equal gradeIdx)
+        if (s.rank > changedStudent.rank && curGradeIdx < newGradeIdx) {
+          return { ...s, assignedGrade: grade };
+        }
+        return s;
+      });
+    });
+    setActivePreset(null);
+  }, []);
+
+  const handleReset = useCallback(() => {
+    setStudents(makeDefaultStudents());
+    setBuckets(DEFAULT_BUCKETS);
+    setActivePreset(null);
+  }, []);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <div className="min-h-screen bg-background flex flex-col">
+      {/* Header */}
+      <header className="border-b px-6 py-3 flex items-center justify-between shrink-0">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight">Bucket Grading Playground</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Configure bucket rules, load students, and explore distributions
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+        <Button variant="outline" size="sm" onClick={handleReset} className="text-xs">
+          Reset All
+        </Button>
+      </header>
+
+      {/* Main 3-column grid */}
+      <div
+        className="flex-1 grid divide-x overflow-hidden"
+        style={{ gridTemplateColumns: "260px 1fr 300px" }}
+      >
+        {/* LEFT: Bucket Rules */}
+        <aside className="flex flex-col p-4 overflow-auto">
+          <h2 className="text-sm font-semibold mb-3">Bucket Rules</h2>
+          <BucketRules
+            buckets={buckets}
+            onChange={handleBucketsChange}
+            studentCount={students.length}
+          />
+
+        </aside>
+
+        {/* CENTER: Students */}
+        <main className="flex flex-col p-4">
+          <h2 className="text-sm font-semibold mb-3">
+            Students
+            {students.length > 0 && (
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                ({students.length} loaded)
+              </span>
+            )}
+          </h2>
+          <StudentPanel
+            students={students}
+            buckets={buckets}
+            activePreset={activePreset}
+            onStudentsChange={handleStudentsChange}
+            onGradeChange={handleGradeChange}
+          />
+        </main>
+
+        {/* RIGHT: Distribution */}
+        <aside className="flex flex-col p-4 overflow-auto">
+          <h2 className="text-sm font-semibold mb-3">Distribution</h2>
+          <DistributionPanel
+            students={students}
+            buckets={buckets}
+            onPreset={handlePreset}
+            activePreset={activePreset}
+          />
+        </aside>
+      </div>
+
     </div>
   );
 }
