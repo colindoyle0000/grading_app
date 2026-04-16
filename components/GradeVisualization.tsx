@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect } from "react";
-import { Student, GradeBucket } from "@/types";
+import { Student, GradeBucket, MergeGroup } from "@/types";
 import { GRADE_SCALE } from "@/lib/grades";
 import { buildConstraints } from "@/lib/algorithms";
 
@@ -94,7 +94,6 @@ function applyDrag(
 }
 
 // ─── Drag state ───────────────────────────────────────────────────────────────
-// All indices in drag state are grade-scale indices (0–12), not visual-column indices.
 type DragState = {
   srcGradeIdx: number;
   circleIdxFromBottom: number;
@@ -107,11 +106,12 @@ type DragState = {
 interface Props {
   students: Student[];
   buckets: GradeBucket[];
+  mergeGroups: MergeGroup[];
   onStudentsChange: (students: Student[]) => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
-export function GradeVisualization({ students, buckets, onStudentsChange }: Props) {
+export function GradeVisualization({ students, buckets, mergeGroups, onStudentsChange }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<DragState>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -140,8 +140,25 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
   const N = students.length;
   const constraints = buildConstraints(buckets, N);
 
+  // ── Effective max counts for merged groups ──────────────────────────────────
+  // For a grade in a max merge group: effectiveMax = min(grade.maxCount, totalGroupMax - countInOtherGroupGrades)
+  // Uses committed students (not drag preview) — updates as students move between columns.
+  const effectiveMaxCounts: number[] = constraints.map((c) => {
+    const group = mergeGroups.find(
+      (g) => g.field === "max" && g.grades.includes(c.grade)
+    );
+    if (!group) return c.maxCount;
+    const groupTotalCount = Math.floor((group.totalPct / 100) * N);
+    const otherGroupCount = group.grades
+      .filter((g) => g !== c.grade)
+      .reduce(
+        (sum, g) => sum + students.filter((s) => s.assignedGrade === g).length,
+        0,
+      );
+    return Math.max(0, Math.min(c.maxCount, groupTotalCount - otherGroupCount));
+  });
+
   // ── Visible columns: only grades with maxCount > 0 ─────────────────────────
-  // visibleGradeIndices[visCol] = grade-scale index
   const visibleGradeIndices: number[] = constraints
     .map((c, i) => ({ c, i }))
     .filter(({ c }) => c.maxCount > 0)
@@ -172,14 +189,12 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
     }
   }
 
-  // delayMap: studentId → extra transition-delay ms (only for moving circles)
-  // Worst-ranked mover (highest rank number) arrives first (delay 0) in both directions.
   const delayMap = new Map<string, number>();
   if (drag && movingIds.size > 0) {
     const movingStudents = [...movingIds]
       .map((id) => displayStudents.find((s) => s.id === id))
       .filter((s): s is Student => s !== undefined)
-      .sort((a, b) => a.rank - b.rank); // index 0 = best rank
+      .sort((a, b) => a.rank - b.rank);
 
     movingStudents.forEach((s, sortedIdx) => {
       const n = movingStudents.length;
@@ -209,7 +224,6 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
   function handleSVGPointerMove(e: React.PointerEvent<SVGSVGElement>) {
     if (!drag || !svgRef.current) return;
     const { x: svgX } = clientToSVG(svgRef.current, e.clientX, e.clientY);
-    // Convert SVG-x → visible column → grade-scale index
     const dstGradeIdx = visibleGradeIndices[visColFromSVGX(svgX)];
     if (dstGradeIdx === drag.currentGradeIdx) return;
 
@@ -251,11 +265,12 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
   for (let v = 0; v <= maxCount + tickStep; v += tickStep) ticks.push(v);
 
   const hasGrades = students.some((s) => s.assignedGrade);
+  const hasMaxGroups = mergeGroups.some((g) => g.field === "max");
 
   return (
     <div>
       {/* Legend + drag hint */}
-      <div className="flex items-center gap-5 px-1 py-1.5 border-b bg-muted/30 text-xs text-muted-foreground">
+      <div className="flex items-center gap-5 px-1 py-1.5 border-b bg-muted/30 text-xs text-muted-foreground flex-wrap">
         <div className="flex items-center gap-1.5">
           <svg width="13" height="13" className="shrink-0">
             <rect x="1" y="1" width="11" height="11" fill="#d1d5db" />
@@ -268,6 +283,20 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
           </svg>
           <span>Max %</span>
         </div>
+        {hasMaxGroups && (
+          <div className="flex items-center gap-1.5">
+            <svg width="13" height="13" className="shrink-0">
+              <rect
+                x="1" y="1" width="11" height="11"
+                fill="rgba(59,130,246,0.08)"
+                stroke="#3b82f6"
+                strokeWidth="1.5"
+                strokeDasharray="4 2"
+              />
+            </svg>
+            <span>Shared pool</span>
+          </div>
+        )}
         <div className="flex items-center gap-1.5">
           <svg width="13" height="13" className="shrink-0">
             <circle cx="6.5" cy="6.5" r="5" fill="#3b82f6" />
@@ -315,22 +344,65 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
             );
           })}
 
-          {/* ── Layer 2: Max bars (black stroke, no fill) ── */}
+          {/* ── Layer 2: Max bars ──
+              Non-merged: solid black outline at maxCount height.
+              Merged: grey dashed outline (individual ceiling) + blue dashed rect (effective pool). */}
           {visibleGradeIndices.map((gradeIdx, visCol) => {
             const c = constraints[gradeIdx];
-            const h = barH(c.maxCount);
+            const effMax = effectiveMaxCounts[gradeIdx];
+            const isInMaxGroup = mergeGroups.some(
+              (g) => g.field === "max" && g.grades.includes(c.grade)
+            );
+
+            const x = colCenterX(visCol) - COL_W * 0.38;
+            const w = COL_W * 0.76;
+
+            if (!isInMaxGroup) {
+              return (
+                <rect
+                  key={`max-${c.grade}`}
+                  x={x}
+                  y={CHART_BOTTOM - barH(c.maxCount)}
+                  width={w}
+                  height={barH(c.maxCount)}
+                  fill="none"
+                  stroke="#111827"
+                  strokeWidth={1}
+                  pointerEvents="none"
+                />
+              );
+            }
+
+            // Merged grade: two overlapping shapes
             return (
-              <rect
-                key={`max-${c.grade}`}
-                x={colCenterX(visCol) - COL_W * 0.38}
-                y={CHART_BOTTOM - h}
-                width={COL_W * 0.76}
-                height={h}
-                fill="none"
-                stroke="#111827"
-                strokeWidth={1}
-                pointerEvents="none"
-              />
+              <g key={`max-${c.grade}`} pointerEvents="none">
+                {/* Individual ceiling — light grey dashed */}
+                {c.maxCount > 0 && (
+                  <rect
+                    x={x}
+                    y={CHART_BOTTOM - barH(c.maxCount)}
+                    width={w}
+                    height={barH(c.maxCount)}
+                    fill="none"
+                    stroke="#9ca3af"
+                    strokeWidth={1}
+                    strokeDasharray="4 3"
+                  />
+                )}
+                {/* Effective pool — blue dashed, shrinks as siblings fill */}
+                {effMax > 0 && (
+                  <rect
+                    x={x}
+                    y={CHART_BOTTOM - barH(effMax)}
+                    width={w}
+                    height={barH(effMax)}
+                    fill="rgba(59,130,246,0.08)"
+                    stroke="#3b82f6"
+                    strokeWidth={1.5}
+                    strokeDasharray="5 3"
+                  />
+                )}
+              </g>
             );
           })}
 
@@ -353,8 +425,7 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
 
           {/* ── Layer 4: Student circles ──────────────────────────────────────
               Flat array sorted by rank — same key = same DOM node = CSS
-              transitions on cx/cy fire reliably when a student changes columns.
-              Circles for grades with maxCount=0 (hidden columns) are skipped.  */}
+              transitions on cx/cy fire reliably when a student changes columns.  */}
           {displayStudents
             .filter((s) => s.assignedGrade !== null)
             .sort((a, b) => a.rank - b.rank)
@@ -362,7 +433,7 @@ export function GradeVisualization({ students, buckets, onStudentsChange }: Prop
               const gradeIdx = gradeScaleArr.indexOf(student.assignedGrade!);
               if (gradeIdx < 0) return null;
               const visCol = gradeToVisCol.get(gradeIdx);
-              if (visCol === undefined) return null; // grade column is hidden
+              if (visCol === undefined) return null;
 
               const col = columnStudents[gradeIdx];
               const idxInCol = col.findIndex((s) => s.id === student.id);

@@ -1,6 +1,6 @@
 "use client";
 
-import { Student, GradeBucket, DistributionPreset } from "@/types";
+import { Student, GradeBucket, DistributionPreset, MergeGroup } from "@/types";
 import { GRADE_SCALE } from "@/lib/grades";
 import {
   buildConstraints,
@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 interface Props {
   students: Student[];
   buckets: GradeBucket[];
+  mergeGroups: MergeGroup[];
   onPreset: (preset: DistributionPreset) => void;
   activePreset: DistributionPreset | null;
 }
@@ -43,7 +44,7 @@ const GRADE_BAR_COLORS: Record<string, string> = {
   "F":  "bg-red-600",
 };
 
-export function DistributionPanel({ students, buckets, onPreset, activePreset }: Props) {
+export function DistributionPanel({ students, buckets, mergeGroups, onPreset, activePreset }: Props) {
   const n = students.length;
   const hasStudents = n > 0;
   const hasGrades = students.some((s) => s.assignedGrade !== null);
@@ -53,7 +54,7 @@ export function DistributionPanel({ students, buckets, onPreset, activePreset }:
   const mean = hasGrades ? computeMean(students) : null;
   const median = hasGrades ? computeMedian(students) : null;
   const stdDev = hasGrades ? computeStdDev(students) : null;
-  const violations = hasGrades ? checkViolations(students, buckets) : [];
+  const violations = hasGrades ? checkViolations(students, buckets, mergeGroups) : [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -172,6 +173,26 @@ export function DistributionPanel({ students, buckets, onPreset, activePreset }:
             </Button>
           ))}
         </div>
+        <button
+          onClick={() => {
+            const rows = [
+              ["ID", "Original Grade", "Curved Grade"],
+              ...students.map((s) => [s.id, String(s.rawScore), s.assignedGrade ?? ""]),
+            ];
+            const csv = rows.map((r) => r.map((c) => `"${c}"`).join(",")).join("\n");
+            const blob = new Blob([csv], { type: "text/csv" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "grades.csv";
+            a.click();
+            URL.revokeObjectURL(url);
+          }}
+          disabled={!hasGrades}
+          className="mt-2 w-full text-xs text-muted-foreground border border-input rounded px-2 py-1.5 hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Download grades as CSV
+        </button>
       </div>
     </div>
   );

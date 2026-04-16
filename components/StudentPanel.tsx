@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Student, GradeBucket, DistributionPreset } from "@/types";
+import { Student, GradeBucket, DistributionPreset, MergeGroup } from "@/types";
 import { parseExcelFile, rankStudents } from "@/lib/excelParser";
 import { StudentList } from "@/components/StudentList";
 import { GradeVisualization } from "@/components/GradeVisualization";
@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 interface Props {
   students: Student[];
   buckets: GradeBucket[];
+  mergeGroups: MergeGroup[];
   activePreset: DistributionPreset | null;
   onStudentsChange: (students: Student[]) => void;
   onLoadStudents: (students: Student[]) => void;
@@ -30,6 +31,7 @@ function makeRow(): ManualRow {
 export function StudentPanel({
   students,
   buckets,
+  mergeGroups,
   activePreset,
   onStudentsChange,
   onLoadStudents,
@@ -228,6 +230,7 @@ export function StudentPanel({
         <GradeVisualization
           students={students}
           buckets={buckets}
+          mergeGroups={mergeGroups}
           onStudentsChange={onStudentsChange}
         />
       )}

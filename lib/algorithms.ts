@@ -1,4 +1,4 @@
-import { GradeBucket, Student, BucketConstraints, SlotUsage } from "@/types";
+import { GradeBucket, Student, BucketConstraints, SlotUsage, MergeGroup } from "@/types";
 import { GPA_MAP } from "@/lib/grades";
 
 /** Build BucketConstraints from raw bucket config + student count */
@@ -11,23 +11,85 @@ export function buildConstraints(buckets: GradeBucket[], n: number): BucketConst
 }
 
 /**
+ * Effective sum of max percentages, accounting for merge groups.
+ * For grades in a max group: the group's totalPct counts once (not each grade's individual maxPct).
+ * For ungrouped grades: their individual maxPct is used.
+ */
+function computeEffectiveSumMaxPct(buckets: GradeBucket[], mergeGroups: MergeGroup[]): number {
+  const maxGroups = mergeGroups.filter((g) => g.field === "max");
+  const gradesInMaxGroup = new Set(maxGroups.flatMap((g) => g.grades));
+  let sum = 0;
+  for (const group of maxGroups) sum += group.totalPct;
+  for (const b of buckets) {
+    if (!gradesInMaxGroup.has(b.grade)) sum += b.maxPct;
+  }
+  return sum;
+}
+
+/**
  * Core allocator: given constraints and N students, returns how many go in each
  * bucket (parallel array to constraints). Returns null if infeasible.
  *
  * fillOrder: indices into constraints, in the order to pile on slack.
+ * mergeGroups: optional group constraints; max-group members share a total cap.
  */
-function allocate(constraints: BucketConstraints[], n: number, fillOrder: number[]): number[] | null {
+function allocate(
+  constraints: BucketConstraints[],
+  n: number,
+  fillOrder: number[],
+  mergeGroups: MergeGroup[] = [],
+): number[] | null {
   const allocs = constraints.map((c) => c.minCount);
   let remaining = n - allocs.reduce((a, b) => a + b, 0);
 
   if (remaining < 0) return null; // sum of mins > N
-  if (constraints.reduce((a, c) => a + c.maxCount, 0) < n) return null; // sum of maxes < N
+
+  // Build group lookup for max-merge groups
+  // gradeToGroupGrades[grade] = all grades sharing this grade's max pool
+  // groupTotalCounts[grade]   = floor(totalPct/100 * n) for this grade's group
+  const groupTotalCounts: Record<string, number> = {};
+  const gradeToGroupGrades: Record<string, string[]> = {};
+  for (const group of mergeGroups) {
+    if (group.field !== "max") continue;
+    const total = Math.floor((group.totalPct / 100) * n);
+    for (const g of group.grades) {
+      groupTotalCounts[g] = total;
+      gradeToGroupGrades[g] = group.grades;
+    }
+  }
+
+  // Feasibility: effective sum of maxes >= n
+  const effectiveSumMax = (() => {
+    const maxGroups = mergeGroups.filter((g) => g.field === "max");
+    const inGroup = new Set(maxGroups.flatMap((g) => g.grades));
+    let s = 0;
+    for (const group of maxGroups) s += Math.floor((group.totalPct / 100) * n);
+    for (const c of constraints) {
+      if (!inGroup.has(c.grade)) s += c.maxCount;
+    }
+    return s;
+  })();
+  if (effectiveSumMax < n) return null;
+
+  function getEffectiveCap(i: number): number {
+    const c = constraints[i];
+    if (groupTotalCounts[c.grade] === undefined) return c.maxCount;
+    const groupGrades = gradeToGroupGrades[c.grade];
+    const currentGroupAlloc = groupGrades.reduce((sum, g) => {
+      const idx = constraints.findIndex((x) => x.grade === g);
+      return sum + (idx >= 0 ? allocs[idx] : 0);
+    }, 0);
+    return Math.min(c.maxCount, groupTotalCounts[c.grade] - currentGroupAlloc);
+  }
 
   for (const i of fillOrder) {
     if (remaining <= 0) break;
-    const add = Math.min(constraints[i].maxCount - allocs[i], remaining);
-    allocs[i] += add;
-    remaining -= add;
+    const cap = getEffectiveCap(i);
+    const add = Math.min(cap - allocs[i], remaining);
+    if (add > 0) {
+      allocs[i] += add;
+      remaining -= add;
+    }
   }
 
   if (remaining > 0) return null; // couldn't fit everyone
@@ -70,11 +132,15 @@ function GRADE_SCALE_FROM_IDX(i: number) { return GRADE_SCALE[i]; }
  * Generous: fill high-grade buckets (A+, A, …) with as many students as allowed.
  * Fill order: 0, 1, 2, … (best first)
  */
-export function distributeGenerous(students: Student[], buckets: GradeBucket[]): Student[] {
+export function distributeGenerous(
+  students: Student[],
+  buckets: GradeBucket[],
+  mergeGroups: MergeGroup[] = [],
+): Student[] {
   const sorted = [...students].sort((a, b) => b.rawScore - a.rawScore);
   const constraints = buildConstraints(buckets, sorted.length);
   const fillOrder = constraints.map((_, i) => i); // 0..12
-  const allocs = allocate(constraints, sorted.length, fillOrder);
+  const allocs = allocate(constraints, sorted.length, fillOrder, mergeGroups);
   if (!allocs) return sorted;
   return assignFromAllocation(sorted, allocs);
 }
@@ -83,11 +149,15 @@ export function distributeGenerous(students: Student[], buckets: GradeBucket[]):
  * Stingy: fill low-grade buckets (F, D-, …) with as many students as allowed.
  * Fill order: 12, 11, 10, … (worst first)
  */
-export function distributeStingy(students: Student[], buckets: GradeBucket[]): Student[] {
+export function distributeStingy(
+  students: Student[],
+  buckets: GradeBucket[],
+  mergeGroups: MergeGroup[] = [],
+): Student[] {
   const sorted = [...students].sort((a, b) => b.rawScore - a.rawScore);
   const constraints = buildConstraints(buckets, sorted.length);
   const fillOrder = constraints.map((_, i) => i).reverse(); // 12..0
-  const allocs = allocate(constraints, sorted.length, fillOrder);
+  const allocs = allocate(constraints, sorted.length, fillOrder, mergeGroups);
   if (!allocs) return sorted;
   return assignFromAllocation(sorted, allocs);
 }
@@ -96,7 +166,11 @@ export function distributeStingy(students: Student[], buckets: GradeBucket[]): S
  * Condensed: cluster as many students as possible in the middle (center-out).
  * Middle = index 6 (C+). Expands outward alternately: 6, 5, 7, 4, 8, …
  */
-export function distributeCondensed(students: Student[], buckets: GradeBucket[]): Student[] {
+export function distributeCondensed(
+  students: Student[],
+  buckets: GradeBucket[],
+  mergeGroups: MergeGroup[] = [],
+): Student[] {
   const sorted = [...students].sort((a, b) => b.rawScore - a.rawScore);
   const constraints = buildConstraints(buckets, sorted.length);
   const n = constraints.length; // 13
@@ -106,7 +180,7 @@ export function distributeCondensed(students: Student[], buckets: GradeBucket[])
     if (center - offset >= 0) fillOrder.push(center - offset);
     if (center + offset < n) fillOrder.push(center + offset);
   }
-  const allocs = allocate(constraints, sorted.length, fillOrder);
+  const allocs = allocate(constraints, sorted.length, fillOrder, mergeGroups);
   if (!allocs) return sorted;
   return assignFromAllocation(sorted, allocs);
 }
@@ -115,7 +189,11 @@ export function distributeCondensed(students: Student[], buckets: GradeBucket[])
  * Spread: maximize number of distinct grade buckets used.
  * Round-robin in center-out order, giving 1 extra per pass until remaining = 0.
  */
-export function distributeSpread(students: Student[], buckets: GradeBucket[]): Student[] {
+export function distributeSpread(
+  students: Student[],
+  buckets: GradeBucket[],
+  mergeGroups: MergeGroup[] = [],
+): Student[] {
   const sorted = [...students].sort((a, b) => b.rawScore - a.rawScore);
   const constraints = buildConstraints(buckets, sorted.length);
   const n = constraints.length;
@@ -125,15 +203,39 @@ export function distributeSpread(students: Student[], buckets: GradeBucket[]): S
     if (center - offset >= 0) centerOut.push(center - offset);
     if (center + offset < n) centerOut.push(center + offset);
   }
+
+  // Build group lookup (same as allocate)
+  const groupTotalCounts: Record<string, number> = {};
+  const gradeToGroupGrades: Record<string, string[]> = {};
+  for (const group of mergeGroups) {
+    if (group.field !== "max") continue;
+    const total = Math.floor((group.totalPct / 100) * sorted.length);
+    for (const g of group.grades) {
+      groupTotalCounts[g] = total;
+      gradeToGroupGrades[g] = group.grades;
+    }
+  }
+
   // For spread, use a custom round-robin allocator
   const allocs = constraints.map((c) => c.minCount);
   let remaining = sorted.length - allocs.reduce((a, b) => a + b, 0);
+
+  function getEffectiveCap(i: number): number {
+    const c = constraints[i];
+    if (groupTotalCounts[c.grade] === undefined) return c.maxCount;
+    const groupGrades = gradeToGroupGrades[c.grade];
+    const currentGroupAlloc = groupGrades.reduce((sum, g) => {
+      const idx = constraints.findIndex((x) => x.grade === g);
+      return sum + (idx >= 0 ? allocs[idx] : 0);
+    }, 0);
+    return Math.min(c.maxCount, groupTotalCounts[c.grade] - currentGroupAlloc);
+  }
 
   while (remaining > 0) {
     let added = 0;
     for (const i of centerOut) {
       if (remaining <= 0) break;
-      if (allocs[i] < constraints[i].maxCount) {
+      if (allocs[i] < getEffectiveCap(i)) {
         allocs[i]++;
         remaining--;
         added++;
@@ -215,33 +317,71 @@ export function computeGuaranteed(
 }
 
 /** Validation: returns list of error strings (empty = valid) */
-export function validateBuckets(buckets: GradeBucket[]): string[] {
+export function validateBuckets(
+  buckets: GradeBucket[],
+  mergeGroups: MergeGroup[] = [],
+): string[] {
   const errors: string[] = [];
   const sumMin = buckets.reduce((a, b) => a + b.minPct, 0);
-  const sumMax = buckets.reduce((a, b) => a + b.maxPct, 0);
+  const effectiveSumMax = computeEffectiveSumMaxPct(buckets, mergeGroups);
+
   if (sumMin > 100) errors.push(`Sum of minimums is ${sumMin.toFixed(1)}% — must be ≤ 100%`);
-  if (sumMax < 100) errors.push(`Sum of maximums is ${sumMax.toFixed(1)}% — must be ≥ 100%`);
+  if (effectiveSumMax < 100) {
+    errors.push(`Effective sum of maximums is ${effectiveSumMax.toFixed(1)}% — must be ≥ 100%`);
+  }
+
   for (const b of buckets) {
     if (b.minPct > b.maxPct) errors.push(`${b.grade}: min (${b.minPct}%) > max (${b.maxPct}%)`);
     if (b.minPct < 0 || b.maxPct > 100) errors.push(`${b.grade}: percentages must be 0–100`);
   }
+
+  // Group-level checks
+  for (const group of mergeGroups) {
+    if (group.field === "max") {
+      const groupMinSum = group.grades.reduce((sum, g) => {
+        const bucket = buckets.find((b) => b.grade === g);
+        return sum + (bucket?.minPct ?? 0);
+      }, 0);
+      if (group.totalPct < groupMinSum) {
+        errors.push(
+          `Merged max [${group.grades.join(", ")}]: pool ${group.totalPct}% < sum of minimums ${groupMinSum}%`
+        );
+      }
+    }
+  }
+
   return errors;
 }
 
 /** Check if the current manual assignment violates any bucket constraints */
 export function checkViolations(
   students: Student[],
-  buckets: GradeBucket[]
+  buckets: GradeBucket[],
+  mergeGroups: MergeGroup[] = [],
 ): string[] {
   const n = students.length;
   if (n === 0) return [];
   const constraints = buildConstraints(buckets, n);
   const usage = computeSlotUsage(students);
   const violations: string[] = [];
+
   for (const c of constraints) {
     const count = usage[c.grade] ?? 0;
     if (count < c.minCount) violations.push(`${c.grade} below minimum (${count}/${c.minCount})`);
     if (count > c.maxCount) violations.push(`${c.grade} above maximum (${count}/${c.maxCount})`);
   }
+
+  // Group-level max violations
+  for (const group of mergeGroups) {
+    if (group.field !== "max") continue;
+    const groupCount = group.grades.reduce((sum, g) => sum + (usage[g] ?? 0), 0);
+    const groupMax = Math.floor((group.totalPct / 100) * n);
+    if (groupCount > groupMax) {
+      violations.push(
+        `Group [${group.grades.join(", ")}] above shared max (${groupCount}/${groupMax})`
+      );
+    }
+  }
+
   return violations;
 }
