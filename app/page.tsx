@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { Student, GradeBucket, DistributionPreset, MergeGroup, MergeField } from "@/types";
-import { DEFAULT_BUCKETS, GRADE_SCALE } from "@/lib/grades";
+import { Student, GradeBucket, DistributionPreset, MergeGroup, MergeField, NormParams } from "@/types";
+import { DEFAULT_BUCKETS, DEFAULT_MERGE_GROUPS, DEFAULT_NORM_PARAMS, GRADE_SCALE } from "@/lib/grades";
 import {
   distributeGenerous,
   distributeStingy,
   distributeCondensed,
   distributeSpread,
+  distributeEasynorm,
   validateBuckets,
 } from "@/lib/algorithms";
 import { rankStudents } from "@/lib/excelParser";
@@ -26,36 +27,44 @@ function makeDefaultStudents(): Student[] {
   return rankStudents(raw);
 }
 
-const DISTRIBUTORS: Record<DistributionPreset, typeof distributeGenerous> = {
+const BUCKET_DISTRIBUTORS: Record<Exclude<DistributionPreset, "easynorm">, typeof distributeGenerous> = {
   generous: distributeGenerous,
   stingy: distributeStingy,
   condensed: distributeCondensed,
   spread: distributeSpread,
 };
 
+// Easynorm curves raw scores and ignores bucket rules; the others fill buckets.
+function runPreset(
+  preset: DistributionPreset,
+  students: Student[],
+  buckets: GradeBucket[],
+  mergeGroups: MergeGroup[],
+  normParams: NormParams,
+): Student[] {
+  if (preset === "easynorm") return distributeEasynorm(students, normParams);
+  return BUCKET_DISTRIBUTORS[preset](students, buckets, mergeGroups);
+}
+
 export default function Home() {
   const [buckets, setBuckets] = useState<GradeBucket[]>(DEFAULT_BUCKETS);
-  const [mergeGroups, setMergeGroups] = useState<MergeGroup[]>([]);
+  const [mergeGroups, setMergeGroups] = useState<MergeGroup[]>(DEFAULT_MERGE_GROUPS);
+  const [normParams, setNormParams] = useState<NormParams>(DEFAULT_NORM_PARAMS);
   const [students, setStudents] = useState<Student[]>(() =>
-    distributeSpread(makeDefaultStudents(), DEFAULT_BUCKETS),
+    distributeEasynorm(makeDefaultStudents(), DEFAULT_NORM_PARAMS),
   );
-  const [activePreset, setActivePreset] = useState<DistributionPreset | null>("spread");
+  const [activePreset, setActivePreset] = useState<DistributionPreset | null>("easynorm");
 
   const isFeasible = validateBuckets(buckets, mergeGroups).length === 0;
 
   // Called when new students are loaded (file upload / manual entry).
-  // Auto-applies the spread preset so the chart is immediately populated.
+  // Auto-applies the Easynorm preset so the chart is immediately populated.
   const handleLoadStudents = useCallback(
     (newStudents: Student[]) => {
-      if (validateBuckets(buckets, mergeGroups).length === 0) {
-        setStudents(distributeSpread(newStudents, buckets, mergeGroups));
-        setActivePreset("spread");
-      } else {
-        setStudents(newStudents);
-        setActivePreset(null);
-      }
+      setStudents(distributeEasynorm(newStudents, normParams));
+      setActivePreset("easynorm");
     },
-    [buckets, mergeGroups],
+    [normParams],
   );
 
   // Called when grades change via drag in the bar chart — no preset reset.
@@ -67,22 +76,37 @@ export default function Home() {
   const handleBucketsChange = useCallback(
     (newBuckets: GradeBucket[]) => {
       setBuckets(newBuckets);
-      if (activePreset && students.length > 0 && validateBuckets(newBuckets, mergeGroups).length === 0) {
-        const updated = DISTRIBUTORS[activePreset](students, newBuckets, mergeGroups);
-        setStudents(updated);
+      if (
+        activePreset &&
+        activePreset !== "easynorm" &&
+        students.length > 0 &&
+        validateBuckets(newBuckets, mergeGroups).length === 0
+      ) {
+        setStudents(runPreset(activePreset, students, newBuckets, mergeGroups, normParams));
       }
     },
-    [activePreset, students, mergeGroups],
+    [activePreset, students, mergeGroups, normParams],
   );
 
   const handlePreset = useCallback(
     (preset: DistributionPreset) => {
-      if (students.length === 0 || !isFeasible) return;
-      const updated = DISTRIBUTORS[preset](students, buckets, mergeGroups);
-      setStudents(updated);
+      if (students.length === 0) return;
+      if (preset !== "easynorm" && !isFeasible) return;
+      setStudents(runPreset(preset, students, buckets, mergeGroups, normParams));
       setActivePreset(preset);
     },
-    [students, buckets, isFeasible, mergeGroups],
+    [students, buckets, isFeasible, mergeGroups, normParams],
+  );
+
+  // Editing the target mean/SD re-curves immediately and selects Easynorm.
+  const handleNormParamsChange = useCallback(
+    (params: NormParams) => {
+      setNormParams(params);
+      if (students.length === 0) return;
+      setStudents(distributeEasynorm(students, params));
+      setActivePreset("easynorm");
+    },
+    [students],
   );
 
   // Grade change with rank-order cascade:
@@ -109,9 +133,10 @@ export default function Home() {
 
   const handleReset = useCallback(() => {
     setBuckets(DEFAULT_BUCKETS);
-    setMergeGroups([]);
-    setStudents(distributeSpread(makeDefaultStudents(), DEFAULT_BUCKETS));
-    setActivePreset("spread");
+    setMergeGroups(DEFAULT_MERGE_GROUPS);
+    setNormParams(DEFAULT_NORM_PARAMS);
+    setStudents(distributeEasynorm(makeDefaultStudents(), DEFAULT_NORM_PARAMS));
+    setActivePreset("easynorm");
   }, []);
 
   // ── Merge/split handlers ───────────────────────────────────────────────────
@@ -303,6 +328,8 @@ export default function Home() {
             mergeGroups={mergeGroups}
             onPreset={handlePreset}
             activePreset={activePreset}
+            normParams={normParams}
+            onNormParamsChange={handleNormParamsChange}
           />
         </aside>
       </div>

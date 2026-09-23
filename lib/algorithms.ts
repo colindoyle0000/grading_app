@@ -1,4 +1,4 @@
-import { GradeBucket, Student, BucketConstraints, SlotUsage, MergeGroup } from "@/types";
+import { GradeBucket, Student, BucketConstraints, SlotUsage, MergeGroup, NormParams } from "@/types";
 import { GPA_MAP } from "@/lib/grades";
 
 /** Build BucketConstraints from raw bucket config + student count */
@@ -164,7 +164,12 @@ export function distributeStingy(
 
 /**
  * Condensed: cluster as many students as possible in the middle (center-out).
- * Middle = index 6 (C+). Expands outward alternately: 6, 5, 7, 4, 8, …
+ * Center is determined dynamically: the grade where the median student falls
+ * under the minimum allocations. This anchors the condensed distribution around
+ * the natural midpoint of the constrained grade range rather than the fixed
+ * midpoint of the 13-grade scale (which drifts away from the actual median when
+ * minimums are concentrated in the upper half). Falls back to the grade-scale
+ * midpoint (C+, index 6) when minimums are too sparse to determine the median.
  */
 export function distributeCondensed(
   students: Student[],
@@ -173,8 +178,20 @@ export function distributeCondensed(
 ): Student[] {
   const sorted = [...students].sort((a, b) => b.rawScore - a.rawScore);
   const constraints = buildConstraints(buckets, sorted.length);
-  const n = constraints.length; // 13
-  const center = Math.floor(n / 2); // 6
+  const n = constraints.length;
+
+  // Find the grade where the median student lands under minimum allocations.
+  const half = Math.floor(sorted.length / 2);
+  let center = Math.floor(n / 2); // fallback: C+ (grade-scale midpoint)
+  let cumulative = 0;
+  for (let i = 0; i < n; i++) {
+    cumulative += constraints[i].minCount;
+    if (cumulative >= half) {
+      center = i;
+      break;
+    }
+  }
+
   const fillOrder: number[] = [center];
   for (let offset = 1; offset < n; offset++) {
     if (center - offset >= 0) fillOrder.push(center - offset);
@@ -245,6 +262,54 @@ export function distributeSpread(
   }
 
   return assignFromAllocation(sorted, allocs);
+}
+
+/**
+ * Map a curved score (0–100 scale) to a letter grade.
+ */
+export function normalizedScoreToGrade(score: number): string {
+  // Cutoffs are whole-number scores, so round first (81.4 → 81 → B, 81.5 → 82 → B+).
+  const rounded = Math.round(score);
+  for (const [cutoff, grade] of EASYNORM_CUTOFFS) {
+    if (rounded >= cutoff) return grade;
+  }
+  return "F"; // 57 and below
+}
+
+// Lowest score for each grade, best → worst, in 3-point bands. 94–100 is "A+*"
+// on the source scale; it maps to A+ because the grade scale has no A+* bucket.
+// C- and below continue the 3-point pattern down from C.
+const EASYNORM_CUTOFFS: [number, string][] = [
+  [91, "A+"],
+  [88, "A"],
+  [85, "A-"],
+  [82, "B+"],
+  [79, "B"],
+  [76, "B-"],
+  [73, "C+"],
+  [70, "C"],
+  [67, "C-"],
+  [64, "D+"],
+  [61, "D"],
+  [58, "D-"],
+];
+
+/**
+ * Easynorm: rescale raw scores so the class has the target mean and SD, then
+ * convert each curved score to a letter with normalizedScoreToGrade().
+ * Ignores bucket rules — any mismatch shows up as constraint violations.
+ */
+export function distributeEasynorm(students: Student[], params: NormParams): Student[] {
+  const sorted = [...students].sort((a, b) => b.rawScore - a.rawScore);
+  const n = sorted.length;
+  if (n === 0) return sorted;
+  const rawMean = sorted.reduce((acc, s) => acc + s.rawScore, 0) / n;
+  const rawSd = Math.sqrt(sorted.reduce((acc, s) => acc + (s.rawScore - rawMean) ** 2, 0) / n);
+  return sorted.map((s) => {
+    // All-identical scores have no spread: everyone lands on the target mean.
+    const z = rawSd > 0 ? (s.rawScore - rawMean) / rawSd : 0;
+    return { ...s, assignedGrade: normalizedScoreToGrade(params.mean + z * params.sd) };
+  });
 }
 
 /** Compute slot usage (grade → count) from a student list */

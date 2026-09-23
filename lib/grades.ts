@@ -1,4 +1,4 @@
-import { GradeBucket } from "@/types";
+import { GradeBucket, MergeGroup, NormParams } from "@/types";
 
 // Ordered best → worst
 export const GRADE_SCALE = [
@@ -36,9 +36,18 @@ export const DEFAULT_BUCKETS: GradeBucket[] = [
   { grade: "B-", minPct: 15,   maxPct: 25 },
   { grade: "C+", minPct: 7.5,  maxPct: 15 },
   { grade: "C",  minPct: 5,    maxPct: 10 },
-  { grade: "C-", minPct: 0,    maxPct: 0  },
-  { grade: "D+", minPct: 0,    maxPct: 0  },
-  { grade: "D",  minPct: 0,    maxPct: 0  },
-  { grade: "D-", minPct: 0,    maxPct: 0  },
-  { grade: "F",  minPct: 0,    maxPct: 0  },
+  { grade: "C-", minPct: 0,    maxPct: 5  },
+  { grade: "D+", minPct: 0,    maxPct: 5  },
+  { grade: "D",  minPct: 0,    maxPct: 5  },
+  { grade: "D-", minPct: 0,    maxPct: 5  },
+  { grade: "F",  minPct: 0,    maxPct: 5  },
 ];
+
+// C- through F share one pool: 0–5% combined (each individually capped at 5%).
+const LOW_GRADES = ["C-", "D+", "D", "D-", "F"];
+export const DEFAULT_MERGE_GROUPS: MergeGroup[] = [
+  { id: `max-${LOW_GRADES.join(",")}`, field: "max", grades: LOW_GRADES, totalPct: 5 },
+  { id: `min-${LOW_GRADES.join(",")}`, field: "min", grades: LOW_GRADES, totalPct: 0 },
+];
+
+export const DEFAULT_NORM_PARAMS: NormParams = { mean: 81, sd: 6 };

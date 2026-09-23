@@ -1,6 +1,7 @@
 "use client";
 
-import { Student, GradeBucket, DistributionPreset, MergeGroup } from "@/types";
+import { useState } from "react";
+import { Student, GradeBucket, DistributionPreset, MergeGroup, NormParams } from "@/types";
 import { GRADE_SCALE } from "@/lib/grades";
 import {
   buildConstraints,
@@ -19,9 +20,11 @@ interface Props {
   mergeGroups: MergeGroup[];
   onPreset: (preset: DistributionPreset) => void;
   activePreset: DistributionPreset | null;
+  normParams: NormParams;
+  onNormParamsChange: (params: NormParams) => void;
 }
 
-const PRESETS: { key: DistributionPreset; label: string; description: string }[] = [
+const PRESETS: { key: Exclude<DistributionPreset, "easynorm">; label: string; description: string }[] = [
   { key: "generous",  label: "Generous",  description: "Maximize high grades" },
   { key: "stingy",    label: "Stingy",    description: "Minimize high grades" },
   { key: "condensed", label: "Condensed", description: "Cluster in the middle" },
@@ -44,7 +47,70 @@ const GRADE_BAR_COLORS: Record<string, string> = {
   "F":  "bg-red-600",
 };
 
-export function DistributionPanel({ students, buckets, mergeGroups, onPreset, activePreset }: Props) {
+/**
+ * Number field that keeps its own draft text so the user can clear it or type
+ * "8." mid-edit; only valid values inside [min, max] are committed upward.
+ */
+function NormField({
+  label,
+  value,
+  min,
+  max,
+  onCommit,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onCommit: (v: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  const [lastValue, setLastValue] = useState(value);
+  // Resync the draft when the value changes from outside (e.g. Reset All).
+  if (value !== lastValue) {
+    setLastValue(value);
+    setDraft(String(value));
+  }
+  const parsed = parseFloat(draft);
+  const invalid = draft.trim() === "" || isNaN(parsed) || parsed < min || parsed > max;
+
+  return (
+    <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      {label}
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={0.5}
+        value={draft}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          const v = parseFloat(e.target.value);
+          if (!isNaN(v) && v >= min && v <= max) {
+            setLastValue(v);
+            onCommit(v);
+          }
+        }}
+        onBlur={() => setDraft(String(value))}
+        aria-invalid={invalid}
+        className={`w-16 text-right rounded border px-1.5 py-0.5 text-sm text-foreground bg-background focus:outline-none focus:ring-1 focus:ring-ring ${
+          invalid ? "border-destructive" : "border-input"
+        }`}
+      />
+    </label>
+  );
+}
+
+export function DistributionPanel({
+  students,
+  buckets,
+  mergeGroups,
+  onPreset,
+  activePreset,
+  normParams,
+  onNormParamsChange,
+}: Props) {
+  const easynormActive = activePreset === "easynorm";
   const n = students.length;
   const hasStudents = n > 0;
   const hasGrades = students.some((s) => s.assignedGrade !== null);
@@ -151,6 +217,45 @@ export function DistributionPanel({ students, buckets, mergeGroups, onPreset, ac
         <p className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">
           Distribution Presets
         </p>
+        <div
+          className={`mb-1.5 rounded-lg border p-1.5 ${
+            easynormActive ? "border-primary bg-primary/5" : "border-input"
+          }`}
+        >
+          <Button
+            variant={easynormActive ? "default" : "outline"}
+            size="sm"
+            onClick={() => onPreset("easynorm")}
+            disabled={!hasStudents}
+            className="w-full flex flex-col h-auto py-1.5 text-xs"
+            title="Curve raw scores to a target mean and standard deviation"
+          >
+            <span className="font-semibold">Easynorm</span>
+            <span
+              className={`text-[10px] ${
+                easynormActive ? "text-primary-foreground/70" : "text-muted-foreground"
+              }`}
+            >
+              Normalize to a target mean &amp; SD
+            </span>
+          </Button>
+          <div className="flex items-center justify-between gap-2 px-1 pt-1.5">
+            <NormField
+              label="Mean"
+              value={normParams.mean}
+              min={0}
+              max={100}
+              onCommit={(mean) => onNormParamsChange({ ...normParams, mean })}
+            />
+            <NormField
+              label="SD"
+              value={normParams.sd}
+              min={0.5}
+              max={50}
+              onCommit={(sd) => onNormParamsChange({ ...normParams, sd })}
+            />
+          </div>
+        </div>
         <div className="grid grid-cols-2 gap-1.5">
           {PRESETS.map((p) => (
             <Button

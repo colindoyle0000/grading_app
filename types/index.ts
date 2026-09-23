@@ -18,7 +18,12 @@ export type BucketConstraints = GradeBucket & {
 
 export type SlotUsage = Record<string, number>;
 
-export type DistributionPreset = "generous" | "stingy" | "condensed" | "spread";
+export type DistributionPreset = "generous" | "stingy" | "condensed" | "spread" | "easynorm";
+
+export type NormParams = {
+  mean: number; // target mean of the curved scores (0–100 scale)
+  sd: number;   // target standard deviation of the curved scores
+};
 
 export type MergeField = "min" | "max";
 
