@@ -483,7 +483,10 @@ export function GradeVisualization({ students, buckets, mergeGroups, onStudentsC
                     if (!drag) setHoveredId(student.id);
                   }}
                   onMouseLeave={() => setHoveredId(null)}
-                />
+                >
+                  {/* Native hover tooltip; hidden mid-drag so it doesn't trail the cursor. */}
+                  {!drag && <title>{`ID ${student.id} · Raw score ${student.rawScore}`}</title>}
+                </circle>
               );
             })}
 

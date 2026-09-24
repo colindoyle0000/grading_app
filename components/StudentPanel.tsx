@@ -37,7 +37,7 @@ export function StudentPanel({
   onLoadStudents,
   onGradeChange,
 }: Props) {
-  const [tab, setTab] = useState<Tab>("upload");
+  const [tab, setTab] = useState<Tab>("chart");
   const [dragging, setDragging] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadName, setUploadName] = useState<string | null>(null);
@@ -54,7 +54,7 @@ export function StudentPanel({
       }
       setUploadName(`${file.name} (${parsed.length} students)`);
       onLoadStudents(parsed);
-      setTab("list");
+      setTab("chart");
     } catch {
       setUploadError("Could not parse file. Please use .xlsx, .xls, or .csv.");
     }
@@ -78,7 +78,7 @@ export function StudentPanel({
       }));
     if (valid.length === 0) return;
     onLoadStudents(rankStudents(valid));
-    setTab("list");
+    setTab("chart");
   }
 
   function updateRow(i: number, field: keyof ManualRow, val: string) {
