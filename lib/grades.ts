@@ -28,19 +28,19 @@ export const GPA_MAP: Record<string, number> = {
 };
 
 export const DEFAULT_BUCKETS: GradeBucket[] = [
-  { grade: "A+", minPct: 0,    maxPct: 5  },
-  { grade: "A",  minPct: 5,    maxPct: 10 },
-  { grade: "A-", minPct: 7.5,  maxPct: 15 },
-  { grade: "B+", minPct: 15,   maxPct: 25 },
-  { grade: "B",  minPct: 15,   maxPct: 25 },
-  { grade: "B-", minPct: 15,   maxPct: 25 },
-  { grade: "C+", minPct: 7.5,  maxPct: 15 },
-  { grade: "C",  minPct: 5,    maxPct: 10 },
-  { grade: "C-", minPct: 0,    maxPct: 5  },
-  { grade: "D+", minPct: 0,    maxPct: 5  },
-  { grade: "D",  minPct: 0,    maxPct: 5  },
-  { grade: "D-", minPct: 0,    maxPct: 5  },
-  { grade: "F",  minPct: 0,    maxPct: 5  },
+  { grade: "A+", minPct: 2.5,  maxPct: 7.5  },
+  { grade: "A",  minPct: 7.5,  maxPct: 12.5 },
+  { grade: "A-", minPct: 12.5, maxPct: 17.5 },
+  { grade: "B+", minPct: 17.5, maxPct: 22.5 },
+  { grade: "B",  minPct: 17.5, maxPct: 22.5 },
+  { grade: "B-", minPct: 12.5, maxPct: 17.5 },
+  { grade: "C+", minPct: 7.5,  maxPct: 12.5 },
+  { grade: "C",  minPct: 2.5,  maxPct: 7.5  },
+  { grade: "C-", minPct: 0,    maxPct: 5    },
+  { grade: "D+", minPct: 0,    maxPct: 5    },
+  { grade: "D",  minPct: 0,    maxPct: 5    },
+  { grade: "D-", minPct: 0,    maxPct: 5    },
+  { grade: "F",  minPct: 0,    maxPct: 5    },
 ];
 
 // C- through F share one pool: 0–5% combined (each individually capped at 5%).
