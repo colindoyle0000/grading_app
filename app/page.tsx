@@ -12,15 +12,16 @@ import {
   validateBuckets,
 } from "@/lib/algorithms";
 import { rankStudents } from "@/lib/excelParser";
+import { SAMPLE_RAW_SCORES } from "@/lib/sampleData";
 import { BucketRules } from "@/components/BucketRules";
 import { StudentPanel } from "@/components/StudentPanel";
 import { DistributionPanel } from "@/components/DistributionPanel";
 import { Button } from "@/components/ui/button";
 
 function makeDefaultStudents(): Student[] {
-  const raw = Array.from({ length: 100 }, (_, i) => ({
-    id: `ID${i + 1}`,
-    rawScore: 100 - i * 0.5,
+  const raw = SAMPLE_RAW_SCORES.map((rawScore, i) => ({
+    id: String(i + 1),
+    rawScore,
     rank: 0,
     assignedGrade: null,
   }));
@@ -43,7 +44,11 @@ function runPreset(
   normParams: NormParams,
 ): Student[] {
   if (preset === "easynorm") return distributeEasynorm(students, normParams);
-  return BUCKET_DISTRIBUTORS[preset](students, buckets, mergeGroups);
+  // Bucket presets don't produce a curved score; clear any left from Easynorm.
+  return BUCKET_DISTRIBUTORS[preset](students, buckets, mergeGroups).map((s) => ({
+    ...s,
+    curvedScore: null,
+  }));
 }
 
 export default function Home() {

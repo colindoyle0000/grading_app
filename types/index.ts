@@ -9,6 +9,7 @@ export type Student = {
   rawScore: number;
   rank: number; // 1 = highest score
   assignedGrade: string | null;
+  curvedScore?: number | null; // Easynorm's normalized score; null for bucket presets
 };
 
 export type BucketConstraints = GradeBucket & {

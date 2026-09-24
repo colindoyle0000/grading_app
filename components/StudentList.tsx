@@ -1,7 +1,7 @@
 "use client";
 
 import { Student, GradeBucket } from "@/types";
-import { GRADE_SCALE } from "@/lib/grades";
+import { GRADE_SCALE, GPA_MAP } from "@/lib/grades";
 
 interface Props {
   students: Student[];
@@ -41,8 +41,12 @@ export function StudentList({ students, onGradeChange }: Omit<Props, "buckets"> 
           <tr className="text-xs text-muted-foreground border-b">
             <th className="py-1.5 text-left font-medium w-8">#</th>
             <th className="py-1.5 text-left font-medium">ID</th>
-            <th className="py-1.5 text-right font-medium pr-2">Score</th>
-            <th className="py-1.5 text-right font-medium">Grade</th>
+            <th className="py-1.5 text-right font-medium pr-2">Raw Score</th>
+            <th className="py-1.5 text-right font-medium pr-2" title="Curved score from Easynorm">
+              Score
+            </th>
+            <th className="py-1.5 text-right font-medium pr-2">Letter Grade</th>
+            <th className="py-1.5 text-right font-medium">GPA</th>
           </tr>
         </thead>
         <tbody>
@@ -55,8 +59,15 @@ export function StudentList({ students, onGradeChange }: Omit<Props, "buckets"> 
               <td className="py-0.5 font-mono text-xs max-w-[120px] truncate" title={s.id}>
                 {s.id}
               </td>
-              <td className="py-0.5 text-right pr-2 tabular-nums">{s.rawScore.toFixed(1)}</td>
-              <td className="py-0.5 text-right">
+              <td className="py-0.5 text-right pr-2 tabular-nums">{s.rawScore}</td>
+              <td className="py-0.5 text-right pr-2 tabular-nums">
+                {s.curvedScore != null ? (
+                  s.curvedScore.toFixed(1)
+                ) : (
+                  <span className="text-muted-foreground text-xs">—</span>
+                )}
+              </td>
+              <td className="py-0.5 text-right pr-2">
                 {s.assignedGrade === null ? (
                   <span className="text-muted-foreground text-xs">—</span>
                 ) : (
@@ -73,6 +84,13 @@ export function StudentList({ students, onGradeChange }: Omit<Props, "buckets"> 
                       </option>
                     ))}
                   </select>
+                )}
+              </td>
+              <td className="py-0.5 text-right tabular-nums">
+                {s.assignedGrade !== null ? (
+                  GPA_MAP[s.assignedGrade].toFixed(3)
+                ) : (
+                  <span className="text-muted-foreground text-xs">—</span>
                 )}
               </td>
             </tr>

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Student, GradeBucket, DistributionPreset, MergeGroup, NormParams } from "@/types";
-import { GRADE_SCALE } from "@/lib/grades";
+import { GRADE_SCALE, GPA_MAP } from "@/lib/grades";
 import {
   buildConstraints,
   computeSlotUsage,
@@ -281,8 +281,14 @@ export function DistributionPanel({
         <button
           onClick={() => {
             const rows = [
-              ["ID", "Original Grade", "Curved Grade"],
-              ...students.map((s) => [s.id, String(s.rawScore), s.assignedGrade ?? ""]),
+              ["ID", "Raw Score", "Score", "Letter Grade", "GPA"],
+              ...students.map((s) => [
+                s.id,
+                String(s.rawScore),
+                s.curvedScore != null ? s.curvedScore.toFixed(1) : "",
+                s.assignedGrade ?? "",
+                s.assignedGrade ? GPA_MAP[s.assignedGrade].toFixed(3) : "",
+              ]),
             ];
             const csv = rows.map((r) => r.map((c) => `"${c}"`).join(",")).join("\n");
             const blob = new Blob([csv], { type: "text/csv" });

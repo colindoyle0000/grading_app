@@ -295,21 +295,54 @@ const EASYNORM_CUTOFFS: [number, string][] = [
 ];
 
 /**
- * Easynorm: rescale raw scores so the class has the target mean and SD, then
+ * Inverse of the standard normal CDF: the z-score below which fraction p of a
+ * normal distribution falls. Acklam's rational approximation (error < 1.2e-9).
+ */
+function inverseNormalCdf(p: number): number {
+  const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239];
+  const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
+  const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+  const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
+  const pLow = 0.02425;
+  if (p < pLow) {
+    const q = Math.sqrt(-2 * Math.log(p));
+    return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+      ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  }
+  if (p > 1 - pLow) return -inverseNormalCdf(1 - p);
+  const q = p - 0.5;
+  const r = q * q;
+  return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
+    (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+}
+
+/**
+ * Easynorm: fit the class to a bell curve with the target mean and SD, then
  * convert each curved score to a letter with normalizedScoreToGrade().
+ *
+ * Placement is by rank, not raw score: a student at percentile p gets the
+ * score a normal distribution has at percentile p. The result is bell-shaped
+ * whatever the shape of the raw scores (a linear rescale would keep a flat or
+ * skewed class flat or skewed). Tied raw scores share their average rank, so
+ * they always get the same grade.
  * Ignores bucket rules — any mismatch shows up as constraint violations.
  */
 export function distributeEasynorm(students: Student[], params: NormParams): Student[] {
-  const sorted = [...students].sort((a, b) => b.rawScore - a.rawScore);
+  const sorted = [...students].sort((a, b) => b.rawScore - a.rawScore); // best → worst
   const n = sorted.length;
-  if (n === 0) return sorted;
-  const rawMean = sorted.reduce((acc, s) => acc + s.rawScore, 0) / n;
-  const rawSd = Math.sqrt(sorted.reduce((acc, s) => acc + (s.rawScore - rawMean) ** 2, 0) / n);
-  return sorted.map((s) => {
-    // All-identical scores have no spread: everyone lands on the target mean.
-    const z = rawSd > 0 ? (s.rawScore - rawMean) / rawSd : 0;
-    return { ...s, assignedGrade: normalizedScoreToGrade(params.mean + z * params.sd) };
-  });
+  const result: Student[] = [];
+  let i = 0;
+  while (i < n) {
+    let j = i;
+    while (j + 1 < n && sorted[j + 1].rawScore === sorted[i].rawScore) j++;
+    // Percentile from the bottom at this tie group's midpoint (top of 100 → 0.995).
+    const p = 1 - ((i + j) / 2 + 0.5) / n;
+    const curvedScore = params.mean + inverseNormalCdf(p) * params.sd;
+    const grade = normalizedScoreToGrade(curvedScore);
+    for (let k = i; k <= j; k++) result.push({ ...sorted[k], curvedScore, assignedGrade: grade });
+    i = j + 1;
+  }
+  return result;
 }
 
 /** Compute slot usage (grade → count) from a student list */

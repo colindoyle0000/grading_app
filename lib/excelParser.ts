@@ -12,9 +12,11 @@ export async function parseExcelFile(file: File): Promise<Student[]> {
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-  if (rows.length < 2) return [];
+  if (rows.length === 0) return [];
 
   const header = (rows[0] as unknown[]).map((h) => String(h ?? "").toLowerCase().trim());
+  // A headerless sheet starts with data: a numeric second cell means row 0 is a student.
+  const hasHeader = isNaN(parseFloat(header[1] ?? ""));
 
   const idCol =
     header.findIndex((h) => ["id", "student", "studentid", "student_id", "name"].includes(h));
@@ -26,7 +28,7 @@ export async function parseExcelFile(file: File): Promise<Student[]> {
   const colScore = scoreCol >= 0 ? scoreCol : 1;
 
   const students: Student[] = [];
-  for (let i = 1; i < rows.length; i++) {
+  for (let i = hasHeader ? 1 : 0; i < rows.length; i++) {
     const row = rows[i] as unknown[];
     const id = String(row[colId] ?? "").trim();
     const raw = parseFloat(String(row[colScore] ?? ""));
