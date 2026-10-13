@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Student, GradeBucket, DistributionPreset, MergeGroup, NormParams } from "@/types";
+import { Student, GradeBucket, DistributionPreset, MergeGroup, NormParams, MeanMandate } from "@/types";
 import { GRADE_SCALE, GPA_MAP } from "@/lib/grades";
 import {
   buildConstraints,
@@ -121,6 +121,14 @@ export function DistributionPanel({
   const median = hasGrades ? computeMedian(students) : null;
   const stdDev = hasGrades ? computeStdDev(students) : null;
   const violations = hasGrades ? checkViolations(students, buckets, mergeGroups) : [];
+
+  const mandate = normParams.meanMandate;
+  const setMandate = (patch: Partial<MeanMandate>) =>
+    onNormParamsChange({ ...normParams, meanMandate: { ...mandate, ...patch } });
+  // Mean of the curved scores (only present while Easynorm output is on screen).
+  const curved = students.flatMap((s) => (s.curvedScore != null ? [s.curvedScore] : []));
+  const curvedMean =
+    easynormActive && curved.length > 0 ? curved.reduce((a, b) => a + b, 0) / curved.length : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -254,6 +262,44 @@ export function DistributionPanel({
               max={50}
               onCommit={(sd) => onNormParamsChange({ ...normParams, sd })}
             />
+          </div>
+          <div className="px-1 pt-2 mt-1.5 border-t">
+            <label className="flex items-center gap-1.5 text-xs font-medium cursor-pointer">
+              <input
+                type="checkbox"
+                checked={mandate.enabled}
+                onChange={(e) => setMandate({ enabled: e.target.checked })}
+              />
+              Mandate class mean
+              <span className="ml-auto text-[10px] font-normal text-muted-foreground">
+                {mandate.enabled ? "On" : "Off"}
+              </span>
+            </label>
+            {mandate.enabled && (
+              <>
+                <div className="flex items-center justify-between gap-2 pt-1.5">
+                  <NormField
+                    label="Min"
+                    value={mandate.min}
+                    min={0}
+                    max={mandate.max}
+                    onCommit={(min) => setMandate({ min })}
+                  />
+                  <NormField
+                    label="Max"
+                    value={mandate.max}
+                    min={mandate.min}
+                    max={100}
+                    onCommit={(max) => setMandate({ max })}
+                  />
+                </div>
+                {curvedMean !== null && (
+                  <p className="pt-1.5 text-[10px] text-muted-foreground tabular-nums">
+                    Current class mean: {curvedMean.toFixed(1)}
+                  </p>
+                )}
+              </>
+            )}
           </div>
         </div>
         <div className="grid grid-cols-2 gap-1.5">

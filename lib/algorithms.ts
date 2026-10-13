@@ -1,4 +1,4 @@
-import { GradeBucket, Student, BucketConstraints, SlotUsage, MergeGroup, NormParams } from "@/types";
+import { GradeBucket, Student, BucketConstraints, SlotUsage, MergeGroup, NormParams, MeanMandate } from "@/types";
 import { GPA_MAP } from "@/lib/grades";
 
 /** Build BucketConstraints from raw bucket config + student count */
@@ -325,24 +325,41 @@ function inverseNormalCdf(p: number): number {
  * whatever the shape of the raw scores (a linear rescale would keep a flat or
  * skewed class flat or skewed). Tied raw scores share their average rank, so
  * they always get the same grade.
+ * If the mean mandate is on and the class mean of the curved scores falls
+ * outside [min, max], every score is shifted by the same amount so the mean
+ * lands on the nearest bound. A uniform shift keeps the SD, the order and
+ * ties intact.
  * Ignores bucket rules — any mismatch shows up as constraint violations.
  */
 export function distributeEasynorm(students: Student[], params: NormParams): Student[] {
   const sorted = [...students].sort((a, b) => b.rawScore - a.rawScore); // best → worst
   const n = sorted.length;
-  const result: Student[] = [];
+  const curved: number[] = [];
   let i = 0;
   while (i < n) {
     let j = i;
     while (j + 1 < n && sorted[j + 1].rawScore === sorted[i].rawScore) j++;
     // Percentile from the bottom at this tie group's midpoint (top of 100 → 0.995).
     const p = 1 - ((i + j) / 2 + 0.5) / n;
-    const curvedScore = params.mean + inverseNormalCdf(p) * params.sd;
-    const grade = normalizedScoreToGrade(curvedScore);
-    for (let k = i; k <= j; k++) result.push({ ...sorted[k], curvedScore, assignedGrade: grade });
+    const score = params.mean + inverseNormalCdf(p) * params.sd;
+    for (let k = i; k <= j; k++) curved.push(score);
     i = j + 1;
   }
-  return result;
+
+  const shift = meanMandateShift(curved, params.meanMandate);
+  return sorted.map((s, k) => {
+    const curvedScore = curved[k] + shift;
+    return { ...s, curvedScore, assignedGrade: normalizedScoreToGrade(curvedScore) };
+  });
+}
+
+/** Amount to add to every score so their mean sits inside the mandated range (0 if already inside or off). */
+function meanMandateShift(scores: number[], mandate: MeanMandate | undefined): number {
+  if (!mandate?.enabled || scores.length === 0) return 0;
+  const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+  if (mean < mandate.min) return mandate.min - mean;
+  if (mean > mandate.max) return mandate.max - mean;
+  return 0;
 }
 
 /** Compute slot usage (grade → count) from a student list */

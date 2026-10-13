@@ -50,4 +50,8 @@ export const DEFAULT_MERGE_GROUPS: MergeGroup[] = [
   { id: `min-${LOW_GRADES.join(",")}`, field: "min", grades: LOW_GRADES, totalPct: 0 },
 ];
 
-export const DEFAULT_NORM_PARAMS: NormParams = { mean: 81, sd: 6 };
+export const DEFAULT_NORM_PARAMS: NormParams = {
+  mean: 81,
+  sd: 6,
+  meanMandate: { enabled: true, min: 79, max: 81 },
+};
