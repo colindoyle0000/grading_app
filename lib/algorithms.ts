@@ -36,6 +36,7 @@ function computeEffectiveSumMaxPct(buckets: GradeBucket[], mergeGroups: MergeGro
  *   can while the rest of the class can still bring the mean into [min, max].
  *   If the minimums alone already rule that out, the mandate is dropped and the
  *   mean violation is reported by checkViolations instead.
+ * frozen: bucket indices held at their minimum count (they take no extras).
  */
 function allocate(
   constraints: BucketConstraints[],
@@ -43,6 +44,7 @@ function allocate(
   fillOrder: number[],
   mergeGroups: MergeGroup[] = [],
   mandate?: MeanMandate,
+  frozen?: Set<number>,
 ): number[] | null {
   const allocs = constraints.map((c) => c.minCount);
   let remaining = n - allocs.reduce((a, b) => a + b, 0);
@@ -79,6 +81,7 @@ function allocate(
   /** How many students bucket i can hold given the counts in `counts`. */
   function capFor(counts: number[], i: number): number {
     const c = constraints[i];
+    if (frozen?.has(i)) return c.minCount;
     if (groupTotalCounts[c.grade] === undefined) return c.maxCount;
     const groupAlloc = gradeToGroupGrades[c.grade].reduce((sum, g) => {
       const idx = constraints.findIndex((x) => x.grade === g);
@@ -177,6 +180,10 @@ function GRADE_SCALE_FROM_IDX(i: number) { return GRADE_SCALE[i]; }
 /**
  * Generous: fill high-grade buckets (A+, A, …) with as many students as allowed.
  * Fill order: 0, 1, 2, … (best first)
+ *
+ * Grades below C stay at their minimum: generosity should never push students
+ * down there, even when the mean mandate forces some of the class lower. If the
+ * rules can't hold everyone without those grades, it falls back to using them.
  */
 export function distributeGenerous(
   students: Student[],
@@ -187,7 +194,11 @@ export function distributeGenerous(
   const sorted = [...students].sort((a, b) => b.rawScore - a.rawScore);
   const constraints = buildConstraints(buckets, sorted.length);
   const fillOrder = constraints.map((_, i) => i); // 0..12
-  const allocs = allocate(constraints, sorted.length, fillOrder, mergeGroups, mandate);
+  const cIdx = GRADE_SCALE.indexOf("C");
+  const belowC = new Set(constraints.flatMap((c, i) => (GRADE_SCALE.indexOf(c.grade) > cIdx ? [i] : [])));
+  const allocs =
+    allocate(constraints, sorted.length, fillOrder, mergeGroups, mandate, belowC) ??
+    allocate(constraints, sorted.length, fillOrder, mergeGroups, mandate);
   if (!allocs) return sorted;
   return assignFromAllocation(sorted, allocs);
 }
