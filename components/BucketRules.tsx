@@ -1,7 +1,8 @@
 "use client";
 
 import React from "react";
-import { GradeBucket, MergeGroup, MergeField } from "@/types";
+import { GradeBucket, MergeGroup, MergeField, MeanMandate } from "@/types";
+import { NormField } from "@/components/NormField";
 import { validateBuckets, buildConstraints } from "@/lib/algorithms";
 
 interface Props {
@@ -12,6 +13,8 @@ interface Props {
   onMerge: (gradeAbove: string, gradeBelow: string, field: MergeField) => void;
   onSplit: (gradeAbove: string, gradeBelow: string, field: MergeField) => void;
   onGroupTotalChange: (groupId: string, newTotalPct: number) => void;
+  meanMandate: MeanMandate;
+  onMeanMandateChange: (mandate: MeanMandate) => void;
 }
 
 // ── Separator cell: merge/split control between two adjacent grade rows ──────
@@ -110,6 +113,8 @@ export function BucketRules({
   onMerge,
   onSplit,
   onGroupTotalChange,
+  meanMandate,
+  onMeanMandateChange,
 }: Props) {
   const errors = validateBuckets(buckets, mergeGroups);
   const sumMin = buckets.reduce((a, b) => a + b.minPct, 0);
@@ -302,6 +307,39 @@ export function BucketRules({
             <span>{g.totalPct.toFixed(1)}%</span>
           </div>
         ))}
+      </div>
+
+      {/* Mean mandate: a rule on the class mean, applied to every preset */}
+      <div className="border-t pt-2">
+        <label className="flex items-center gap-1.5 text-xs font-medium cursor-pointer">
+          <input
+            type="checkbox"
+            checked={meanMandate.enabled}
+            onChange={(e) => onMeanMandateChange({ ...meanMandate, enabled: e.target.checked })}
+          />
+          Mandate class mean
+          <span className="ml-auto text-[10px] font-normal text-muted-foreground">
+            {meanMandate.enabled ? "On" : "Off"}
+          </span>
+        </label>
+        {meanMandate.enabled && (
+          <div className="flex items-center justify-between gap-2 pt-1.5">
+            <NormField
+              label="Min"
+              value={meanMandate.min}
+              min={0}
+              max={meanMandate.max}
+              onCommit={(min) => onMeanMandateChange({ ...meanMandate, min })}
+            />
+            <NormField
+              label="Max"
+              value={meanMandate.max}
+              min={meanMandate.min}
+              max={100}
+              onCommit={(max) => onMeanMandateChange({ ...meanMandate, max })}
+            />
+          </div>
+        )}
       </div>
 
       {errors.length > 0 && (

@@ -1,4 +1,4 @@
-import { GradeBucket, MergeGroup, NormParams } from "@/types";
+import { GradeBucket, MergeGroup, NormParams, MeanMandate } from "@/types";
 
 // Ordered best → worst
 export const GRADE_SCALE = [
@@ -50,8 +50,20 @@ export const DEFAULT_MERGE_GROUPS: MergeGroup[] = [
   { id: `min-${LOW_GRADES.join(",")}`, field: "min", grades: LOW_GRADES, totalPct: 0 },
 ];
 
-export const DEFAULT_NORM_PARAMS: NormParams = {
-  mean: 81,
-  sd: 6,
-  meanMandate: { enabled: true, min: 79, max: 81 },
+export const DEFAULT_NORM_PARAMS: NormParams = { mean: 81, sd: 6 };
+
+export const DEFAULT_MEAN_MANDATE: MeanMandate = { enabled: true, min: 79, max: 81 };
+
+/**
+ * Representative 0–100 score for each letter: the midpoint of its band on the
+ * Easynorm scale (see EASYNORM_CUTOFFS). A+ spans 91–100 and F is open-ended
+ * below 58, so those two use 95 and 50. Used wherever a letter has to stand in
+ * for a number, e.g. the class mean of a bucket preset.
+ */
+export const GRADE_SCORE: Record<string, number> = {
+  "A+": 95, "A": 89, "A-": 86,
+  "B+": 83, "B": 80, "B-": 77,
+  "C+": 74, "C": 71, "C-": 68,
+  "D+": 65, "D": 62, "D-": 59,
+  "F": 50,
 };

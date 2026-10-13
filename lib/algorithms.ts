@@ -1,5 +1,5 @@
 import { GradeBucket, Student, BucketConstraints, SlotUsage, MergeGroup, NormParams, MeanMandate } from "@/types";
-import { GPA_MAP } from "@/lib/grades";
+import { GPA_MAP, GRADE_SCORE } from "@/lib/grades";
 
 /** Build BucketConstraints from raw bucket config + student count */
 export function buildConstraints(buckets: GradeBucket[], n: number): BucketConstraints[] {
@@ -32,12 +32,17 @@ function computeEffectiveSumMaxPct(buckets: GradeBucket[], mergeGroups: MergeGro
  *
  * fillOrder: indices into constraints, in the order to pile on slack.
  * mergeGroups: optional group constraints; max-group members share a total cap.
+ * mandate: optional class-mean rule. Each bucket takes as many students as it
+ *   can while the rest of the class can still bring the mean into [min, max].
+ *   If the minimums alone already rule that out, the mandate is dropped and the
+ *   mean violation is reported by checkViolations instead.
  */
 function allocate(
   constraints: BucketConstraints[],
   n: number,
   fillOrder: number[],
   mergeGroups: MergeGroup[] = [],
+  mandate?: MeanMandate,
 ): number[] | null {
   const allocs = constraints.map((c) => c.minCount);
   let remaining = n - allocs.reduce((a, b) => a + b, 0);
@@ -71,21 +76,62 @@ function allocate(
   })();
   if (effectiveSumMax < n) return null;
 
-  function getEffectiveCap(i: number): number {
+  /** How many students bucket i can hold given the counts in `counts`. */
+  function capFor(counts: number[], i: number): number {
     const c = constraints[i];
     if (groupTotalCounts[c.grade] === undefined) return c.maxCount;
-    const groupGrades = gradeToGroupGrades[c.grade];
-    const currentGroupAlloc = groupGrades.reduce((sum, g) => {
+    const groupAlloc = gradeToGroupGrades[c.grade].reduce((sum, g) => {
       const idx = constraints.findIndex((x) => x.grade === g);
-      return sum + (idx >= 0 ? allocs[idx] : 0);
+      return sum + (idx >= 0 ? counts[idx] : 0);
     }, 0);
-    return Math.min(c.maxCount, groupTotalCounts[c.grade] - currentGroupAlloc);
+    return Math.min(c.maxCount, groupTotalCounts[c.grade] - groupAlloc);
   }
+
+  const score = constraints.map((c) => GRADE_SCORE[c.grade] ?? 0);
+  const byScoreAsc = constraints.map((_, i) => i).sort((a, b) => score[a] - score[b]);
+  const byScoreDesc = [...byScoreAsc].reverse();
+
+  /** Total score if `count` more students go into `open` buckets in the given order. */
+  function totalIfFilled(base: number[], open: Set<number>, order: number[], count: number): number | null {
+    const counts = [...base];
+    let left = count;
+    for (const i of order) {
+      if (!open.has(i) || left <= 0) continue;
+      const add = Math.min(Math.max(capFor(counts, i) - counts[i], 0), left);
+      counts[i] += add;
+      left -= add;
+    }
+    if (left > 0) return null;
+    return counts.reduce((sum, c, i) => sum + c * score[i], 0);
+  }
+
+  /** Can the students still unplaced (spread over `open` buckets) land the mean inside the mandate? */
+  function canSatisfyMean(base: number[], open: Set<number>, left: number): boolean {
+    if (!mandate) return true;
+    const low = totalIfFilled(base, open, byScoreAsc, left);
+    const high = totalIfFilled(base, open, byScoreDesc, left);
+    if (low === null || high === null) return false;
+    return low <= mandate.max * n && high >= mandate.min * n;
+  }
+
+  let activeMandate = mandate?.enabled ? mandate : undefined;
+  const open = new Set(fillOrder);
+  if (activeMandate && !canSatisfyMean(allocs, open, remaining)) activeMandate = undefined;
 
   for (const i of fillOrder) {
     if (remaining <= 0) break;
-    const cap = getEffectiveCap(i);
-    const add = Math.min(cap - allocs[i], remaining);
+    open.delete(i);
+    const room = Math.min(Math.max(capFor(allocs, i) - allocs[i], 0), remaining);
+    let add = room;
+    if (activeMandate) {
+      // Largest amount for this bucket that leaves a way to satisfy the mean.
+      while (add > 0) {
+        const trial = [...allocs];
+        trial[i] += add;
+        if (canSatisfyMean(trial, open, remaining - add)) break;
+        add--;
+      }
+    }
     if (add > 0) {
       allocs[i] += add;
       remaining -= add;
@@ -136,11 +182,12 @@ export function distributeGenerous(
   students: Student[],
   buckets: GradeBucket[],
   mergeGroups: MergeGroup[] = [],
+  mandate?: MeanMandate,
 ): Student[] {
   const sorted = [...students].sort((a, b) => b.rawScore - a.rawScore);
   const constraints = buildConstraints(buckets, sorted.length);
   const fillOrder = constraints.map((_, i) => i); // 0..12
-  const allocs = allocate(constraints, sorted.length, fillOrder, mergeGroups);
+  const allocs = allocate(constraints, sorted.length, fillOrder, mergeGroups, mandate);
   if (!allocs) return sorted;
   return assignFromAllocation(sorted, allocs);
 }
@@ -153,114 +200,13 @@ export function distributeStingy(
   students: Student[],
   buckets: GradeBucket[],
   mergeGroups: MergeGroup[] = [],
+  mandate?: MeanMandate,
 ): Student[] {
   const sorted = [...students].sort((a, b) => b.rawScore - a.rawScore);
   const constraints = buildConstraints(buckets, sorted.length);
   const fillOrder = constraints.map((_, i) => i).reverse(); // 12..0
-  const allocs = allocate(constraints, sorted.length, fillOrder, mergeGroups);
+  const allocs = allocate(constraints, sorted.length, fillOrder, mergeGroups, mandate);
   if (!allocs) return sorted;
-  return assignFromAllocation(sorted, allocs);
-}
-
-/**
- * Condensed: cluster as many students as possible in the middle (center-out).
- * Center is determined dynamically: the grade where the median student falls
- * under the minimum allocations. This anchors the condensed distribution around
- * the natural midpoint of the constrained grade range rather than the fixed
- * midpoint of the 13-grade scale (which drifts away from the actual median when
- * minimums are concentrated in the upper half). Falls back to the grade-scale
- * midpoint (C+, index 6) when minimums are too sparse to determine the median.
- */
-export function distributeCondensed(
-  students: Student[],
-  buckets: GradeBucket[],
-  mergeGroups: MergeGroup[] = [],
-): Student[] {
-  const sorted = [...students].sort((a, b) => b.rawScore - a.rawScore);
-  const constraints = buildConstraints(buckets, sorted.length);
-  const n = constraints.length;
-
-  // Find the grade where the median student lands under minimum allocations.
-  const half = Math.floor(sorted.length / 2);
-  let center = Math.floor(n / 2); // fallback: C+ (grade-scale midpoint)
-  let cumulative = 0;
-  for (let i = 0; i < n; i++) {
-    cumulative += constraints[i].minCount;
-    if (cumulative >= half) {
-      center = i;
-      break;
-    }
-  }
-
-  const fillOrder: number[] = [center];
-  for (let offset = 1; offset < n; offset++) {
-    if (center - offset >= 0) fillOrder.push(center - offset);
-    if (center + offset < n) fillOrder.push(center + offset);
-  }
-  const allocs = allocate(constraints, sorted.length, fillOrder, mergeGroups);
-  if (!allocs) return sorted;
-  return assignFromAllocation(sorted, allocs);
-}
-
-/**
- * Spread: maximize number of distinct grade buckets used.
- * Round-robin in center-out order, giving 1 extra per pass until remaining = 0.
- */
-export function distributeSpread(
-  students: Student[],
-  buckets: GradeBucket[],
-  mergeGroups: MergeGroup[] = [],
-): Student[] {
-  const sorted = [...students].sort((a, b) => b.rawScore - a.rawScore);
-  const constraints = buildConstraints(buckets, sorted.length);
-  const n = constraints.length;
-  const center = Math.floor(n / 2);
-  const centerOut: number[] = [center];
-  for (let offset = 1; offset < n; offset++) {
-    if (center - offset >= 0) centerOut.push(center - offset);
-    if (center + offset < n) centerOut.push(center + offset);
-  }
-
-  // Build group lookup (same as allocate)
-  const groupTotalCounts: Record<string, number> = {};
-  const gradeToGroupGrades: Record<string, string[]> = {};
-  for (const group of mergeGroups) {
-    if (group.field !== "max") continue;
-    const total = Math.floor((group.totalPct / 100) * sorted.length);
-    for (const g of group.grades) {
-      groupTotalCounts[g] = total;
-      gradeToGroupGrades[g] = group.grades;
-    }
-  }
-
-  // For spread, use a custom round-robin allocator
-  const allocs = constraints.map((c) => c.minCount);
-  let remaining = sorted.length - allocs.reduce((a, b) => a + b, 0);
-
-  function getEffectiveCap(i: number): number {
-    const c = constraints[i];
-    if (groupTotalCounts[c.grade] === undefined) return c.maxCount;
-    const groupGrades = gradeToGroupGrades[c.grade];
-    const currentGroupAlloc = groupGrades.reduce((sum, g) => {
-      const idx = constraints.findIndex((x) => x.grade === g);
-      return sum + (idx >= 0 ? allocs[idx] : 0);
-    }, 0);
-    return Math.min(c.maxCount, groupTotalCounts[c.grade] - currentGroupAlloc);
-  }
-
-  while (remaining > 0) {
-    let added = 0;
-    for (const i of centerOut) {
-      if (remaining <= 0) break;
-      if (allocs[i] < getEffectiveCap(i)) {
-        allocs[i]++;
-        remaining--;
-        added++;
-      }
-    }
-    if (added === 0) break; // no room left anywhere
-  }
-
   return assignFromAllocation(sorted, allocs);
 }
 
@@ -331,7 +277,11 @@ function inverseNormalCdf(p: number): number {
  * ties intact.
  * Ignores bucket rules — any mismatch shows up as constraint violations.
  */
-export function distributeEasynorm(students: Student[], params: NormParams): Student[] {
+export function distributeEasynorm(
+  students: Student[],
+  params: NormParams,
+  mandate?: MeanMandate,
+): Student[] {
   const sorted = [...students].sort((a, b) => b.rawScore - a.rawScore); // best → worst
   const n = sorted.length;
   const curved: number[] = [];
@@ -346,7 +296,7 @@ export function distributeEasynorm(students: Student[], params: NormParams): Stu
     i = j + 1;
   }
 
-  const shift = meanMandateShift(curved, params.meanMandate);
+  const shift = meanMandateShift(curved, mandate);
   return sorted.map((s, k) => {
     const curvedScore = curved[k] + shift;
     return { ...s, curvedScore, assignedGrade: normalizedScoreToGrade(curvedScore) };
@@ -360,6 +310,56 @@ function meanMandateShift(scores: number[], mandate: MeanMandate | undefined): n
   if (mean < mandate.min) return mandate.min - mean;
   if (mean > mandate.max) return mandate.max - mean;
   return 0;
+}
+
+/**
+ * The 0–100 score a student counts as in class-mean calculations: the Easynorm
+ * curved score while it still matches the assigned grade, otherwise the
+ * midpoint score of the assigned letter (bucket presets, manual edits).
+ */
+export function studentScore(s: Student): number | null {
+  if (s.assignedGrade === null) return null;
+  if (s.curvedScore != null && normalizedScoreToGrade(s.curvedScore) === s.assignedGrade) {
+    return s.curvedScore;
+  }
+  return GRADE_SCORE[s.assignedGrade] ?? null;
+}
+
+/** Scores of all graded students */
+function gradedScores(students: Student[]): number[] {
+  return students.flatMap((s) => {
+    const v = studentScore(s);
+    return v === null ? [] : [v];
+  });
+}
+
+/** Mean 0–100 score of graded students (0 if none) */
+export function computeMeanScore(students: Student[]): number {
+  const v = gradedScores(students);
+  return v.length === 0 ? 0 : v.reduce((a, b) => a + b, 0) / v.length;
+}
+
+/** Median 0–100 score of graded students (0 if none) */
+export function computeMedianScore(students: Student[]): number {
+  return medianOf(gradedScores(students));
+}
+
+/** Mean raw score of graded students (0 if none) */
+export function computeMeanRaw(students: Student[]): number {
+  const v = students.filter((s) => s.assignedGrade !== null).map((s) => s.rawScore);
+  return v.length === 0 ? 0 : v.reduce((a, b) => a + b, 0) / v.length;
+}
+
+/** Median raw score of graded students (0 if none) */
+export function computeMedianRaw(students: Student[]): number {
+  return medianOf(students.filter((s) => s.assignedGrade !== null).map((s) => s.rawScore));
+}
+
+function medianOf(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
 /** Compute slot usage (grade → count) from a student list */
@@ -473,6 +473,7 @@ export function checkViolations(
   students: Student[],
   buckets: GradeBucket[],
   mergeGroups: MergeGroup[] = [],
+  mandate?: MeanMandate,
 ): string[] {
   const n = students.length;
   if (n === 0) return [];
@@ -495,6 +496,18 @@ export function checkViolations(
       violations.push(
         `Group [${group.grades.join(", ")}] above shared max (${groupCount}/${groupMax})`
       );
+    }
+  }
+
+  // Class-mean mandate. Compare at display precision so a mean sitting exactly
+  // on a bound (e.g. after the Easynorm shift) never trips on float noise.
+  if (mandate?.enabled) {
+    const mean = Math.round(computeMeanScore(students) * 100) / 100;
+    if (mean < mandate.min) {
+      violations.push(`Class mean below minimum (${mean.toFixed(2)}/${mandate.min})`);
+    }
+    if (mean > mandate.max) {
+      violations.push(`Class mean above maximum (${mean.toFixed(2)}/${mandate.max})`);
     }
   }
 

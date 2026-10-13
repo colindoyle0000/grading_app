@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { NormField } from "@/components/NormField";
 import { Student, GradeBucket, DistributionPreset, MergeGroup, NormParams, MeanMandate } from "@/types";
 import { GRADE_SCALE, GPA_MAP } from "@/lib/grades";
 import {
@@ -8,6 +8,10 @@ import {
   computeSlotUsage,
   computeMean,
   computeMedian,
+  computeMeanScore,
+  computeMedianScore,
+  computeMeanRaw,
+  computeMedianRaw,
   computeStdDev,
   gpaToLetterGrade,
   checkViolations,
@@ -18,6 +22,7 @@ interface Props {
   students: Student[];
   buckets: GradeBucket[];
   mergeGroups: MergeGroup[];
+  meanMandate: MeanMandate;
   onPreset: (preset: DistributionPreset) => void;
   activePreset: DistributionPreset | null;
   normParams: NormParams;
@@ -25,10 +30,8 @@ interface Props {
 }
 
 const PRESETS: { key: Exclude<DistributionPreset, "easynorm">; label: string; description: string }[] = [
-  { key: "generous",  label: "Generous",  description: "Maximize high grades" },
-  { key: "stingy",    label: "Stingy",    description: "Minimize high grades" },
-  { key: "condensed", label: "Condensed", description: "Cluster in the middle" },
-  { key: "spread",    label: "Spread",    description: "Maximize grade diversity" },
+  { key: "generous", label: "Generous", description: "Preview most generous distribution of grades under current rules" },
+  { key: "stingy",   label: "Stingy",   description: "Preview stingiest distribution of grades under current rules" },
 ];
 
 const GRADE_BAR_COLORS: Record<string, string> = {
@@ -47,64 +50,11 @@ const GRADE_BAR_COLORS: Record<string, string> = {
   "F":  "bg-red-600",
 };
 
-/**
- * Number field that keeps its own draft text so the user can clear it or type
- * "8." mid-edit; only valid values inside [min, max] are committed upward.
- */
-function NormField({
-  label,
-  value,
-  min,
-  max,
-  onCommit,
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  onCommit: (v: number) => void;
-}) {
-  const [draft, setDraft] = useState(String(value));
-  const [lastValue, setLastValue] = useState(value);
-  // Resync the draft when the value changes from outside (e.g. Reset All).
-  if (value !== lastValue) {
-    setLastValue(value);
-    setDraft(String(value));
-  }
-  const parsed = parseFloat(draft);
-  const invalid = draft.trim() === "" || isNaN(parsed) || parsed < min || parsed > max;
-
-  return (
-    <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-      {label}
-      <input
-        type="number"
-        min={min}
-        max={max}
-        step={0.5}
-        value={draft}
-        onChange={(e) => {
-          setDraft(e.target.value);
-          const v = parseFloat(e.target.value);
-          if (!isNaN(v) && v >= min && v <= max) {
-            setLastValue(v);
-            onCommit(v);
-          }
-        }}
-        onBlur={() => setDraft(String(value))}
-        aria-invalid={invalid}
-        className={`w-16 text-right rounded border px-1.5 py-0.5 text-sm text-foreground bg-background focus:outline-none focus:ring-1 focus:ring-ring ${
-          invalid ? "border-destructive" : "border-input"
-        }`}
-      />
-    </label>
-  );
-}
-
 export function DistributionPanel({
   students,
   buckets,
   mergeGroups,
+  meanMandate,
   onPreset,
   activePreset,
   normParams,
@@ -120,15 +70,12 @@ export function DistributionPanel({
   const mean = hasGrades ? computeMean(students) : null;
   const median = hasGrades ? computeMedian(students) : null;
   const stdDev = hasGrades ? computeStdDev(students) : null;
-  const violations = hasGrades ? checkViolations(students, buckets, mergeGroups) : [];
+  const violations = hasGrades ? checkViolations(students, buckets, mergeGroups, meanMandate) : [];
 
-  const mandate = normParams.meanMandate;
-  const setMandate = (patch: Partial<MeanMandate>) =>
-    onNormParamsChange({ ...normParams, meanMandate: { ...mandate, ...patch } });
-  // Mean of the curved scores (only present while Easynorm output is on screen).
-  const curved = students.flatMap((s) => (s.curvedScore != null ? [s.curvedScore] : []));
-  const curvedMean =
-    easynormActive && curved.length > 0 ? curved.reduce((a, b) => a + b, 0) / curved.length : null;
+  const meanScore = hasGrades ? computeMeanScore(students) : null;
+  const medianScore = hasGrades ? computeMedianScore(students) : null;
+  const meanRaw = hasGrades ? computeMeanRaw(students) : null;
+  const medianRaw = hasGrades ? computeMedianRaw(students) : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -200,7 +147,13 @@ export function DistributionPanel({
             {mean !== null ? gpaToLetterGrade(mean) : "—"}
           </p>
           <p className="text-xs text-muted-foreground tabular-nums">
-            {mean !== null ? mean.toFixed(2) : "—"}
+            GPA {mean !== null ? mean.toFixed(2) : "—"}
+          </p>
+          <p className="text-xs text-muted-foreground tabular-nums">
+            Score {meanScore !== null ? meanScore.toFixed(1) : "—"}
+          </p>
+          <p className="text-xs text-muted-foreground tabular-nums">
+            Raw {meanRaw !== null ? meanRaw.toFixed(1) : "—"}
           </p>
         </div>
         <div>
@@ -209,7 +162,13 @@ export function DistributionPanel({
             {median !== null ? gpaToLetterGrade(median) : "—"}
           </p>
           <p className="text-xs text-muted-foreground tabular-nums">
-            {median !== null ? median.toFixed(2) : "—"}
+            GPA {median !== null ? median.toFixed(2) : "—"}
+          </p>
+          <p className="text-xs text-muted-foreground tabular-nums">
+            Score {medianScore !== null ? medianScore.toFixed(1) : "—"}
+          </p>
+          <p className="text-xs text-muted-foreground tabular-nums">
+            Raw {medianRaw !== null ? medianRaw.toFixed(1) : "—"}
           </p>
         </div>
         <div>
@@ -223,7 +182,7 @@ export function DistributionPanel({
       {/* Preset buttons */}
       <div className="border-t pt-3">
         <p className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">
-          Distribution Presets
+          Distribution Preview
         </p>
         <div
           className={`mb-1.5 rounded-lg border p-1.5 ${
@@ -263,46 +222,8 @@ export function DistributionPanel({
               onCommit={(sd) => onNormParamsChange({ ...normParams, sd })}
             />
           </div>
-          <div className="px-1 pt-2 mt-1.5 border-t">
-            <label className="flex items-center gap-1.5 text-xs font-medium cursor-pointer">
-              <input
-                type="checkbox"
-                checked={mandate.enabled}
-                onChange={(e) => setMandate({ enabled: e.target.checked })}
-              />
-              Mandate class mean
-              <span className="ml-auto text-[10px] font-normal text-muted-foreground">
-                {mandate.enabled ? "On" : "Off"}
-              </span>
-            </label>
-            {mandate.enabled && (
-              <>
-                <div className="flex items-center justify-between gap-2 pt-1.5">
-                  <NormField
-                    label="Min"
-                    value={mandate.min}
-                    min={0}
-                    max={mandate.max}
-                    onCommit={(min) => setMandate({ min })}
-                  />
-                  <NormField
-                    label="Max"
-                    value={mandate.max}
-                    min={mandate.min}
-                    max={100}
-                    onCommit={(max) => setMandate({ max })}
-                  />
-                </div>
-                {curvedMean !== null && (
-                  <p className="pt-1.5 text-[10px] text-muted-foreground tabular-nums">
-                    Current class mean: {curvedMean.toFixed(1)}
-                  </p>
-                )}
-              </>
-            )}
-          </div>
         </div>
-        <div className="grid grid-cols-2 gap-1.5">
+        <div className="flex flex-col gap-1.5">
           {PRESETS.map((p) => (
             <Button
               key={p.key}
@@ -310,7 +231,7 @@ export function DistributionPanel({
               size="sm"
               onClick={() => onPreset(p.key)}
               disabled={!hasStudents}
-              className="flex flex-col h-auto py-1.5 text-xs"
+              className="w-full flex flex-col h-auto py-1.5 text-xs whitespace-normal text-center"
               title={p.description}
             >
               <span className="font-semibold">{p.label}</span>

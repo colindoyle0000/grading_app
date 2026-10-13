@@ -1,13 +1,11 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { Student, GradeBucket, DistributionPreset, MergeGroup, MergeField, NormParams } from "@/types";
-import { DEFAULT_BUCKETS, DEFAULT_MERGE_GROUPS, DEFAULT_NORM_PARAMS, GRADE_SCALE } from "@/lib/grades";
+import { Student, GradeBucket, DistributionPreset, MergeGroup, MergeField, NormParams, MeanMandate } from "@/types";
+import { DEFAULT_BUCKETS, DEFAULT_MERGE_GROUPS, DEFAULT_NORM_PARAMS, DEFAULT_MEAN_MANDATE, GRADE_SCALE } from "@/lib/grades";
 import {
   distributeGenerous,
   distributeStingy,
-  distributeCondensed,
-  distributeSpread,
   distributeEasynorm,
   validateBuckets,
 } from "@/lib/algorithms";
@@ -31,21 +29,21 @@ function makeDefaultStudents(): Student[] {
 const BUCKET_DISTRIBUTORS: Record<Exclude<DistributionPreset, "easynorm">, typeof distributeGenerous> = {
   generous: distributeGenerous,
   stingy: distributeStingy,
-  condensed: distributeCondensed,
-  spread: distributeSpread,
 };
 
 // Easynorm curves raw scores and ignores bucket rules; the others fill buckets.
+// The mean mandate applies to all of them.
 function runPreset(
   preset: DistributionPreset,
   students: Student[],
   buckets: GradeBucket[],
   mergeGroups: MergeGroup[],
   normParams: NormParams,
+  mandate: MeanMandate,
 ): Student[] {
-  if (preset === "easynorm") return distributeEasynorm(students, normParams);
+  if (preset === "easynorm") return distributeEasynorm(students, normParams, mandate);
   // Bucket presets don't produce a curved score; clear any left from Easynorm.
-  return BUCKET_DISTRIBUTORS[preset](students, buckets, mergeGroups).map((s) => ({
+  return BUCKET_DISTRIBUTORS[preset](students, buckets, mergeGroups, mandate).map((s) => ({
     ...s,
     curvedScore: null,
   }));
@@ -55,8 +53,9 @@ export default function Home() {
   const [buckets, setBuckets] = useState<GradeBucket[]>(DEFAULT_BUCKETS);
   const [mergeGroups, setMergeGroups] = useState<MergeGroup[]>(DEFAULT_MERGE_GROUPS);
   const [normParams, setNormParams] = useState<NormParams>(DEFAULT_NORM_PARAMS);
+  const [meanMandate, setMeanMandate] = useState<MeanMandate>(DEFAULT_MEAN_MANDATE);
   const [students, setStudents] = useState<Student[]>(() =>
-    distributeEasynorm(makeDefaultStudents(), DEFAULT_NORM_PARAMS),
+    distributeEasynorm(makeDefaultStudents(), DEFAULT_NORM_PARAMS, DEFAULT_MEAN_MANDATE),
   );
   const [activePreset, setActivePreset] = useState<DistributionPreset | null>("easynorm");
 
@@ -66,10 +65,10 @@ export default function Home() {
   // Auto-applies the Easynorm preset so the chart is immediately populated.
   const handleLoadStudents = useCallback(
     (newStudents: Student[]) => {
-      setStudents(distributeEasynorm(newStudents, normParams));
+      setStudents(distributeEasynorm(newStudents, normParams, meanMandate));
       setActivePreset("easynorm");
     },
-    [normParams],
+    [normParams, meanMandate],
   );
 
   // Called when grades change via drag in the bar chart — no preset reset.
@@ -87,20 +86,35 @@ export default function Home() {
         students.length > 0 &&
         validateBuckets(newBuckets, mergeGroups).length === 0
       ) {
-        setStudents(runPreset(activePreset, students, newBuckets, mergeGroups, normParams));
+        setStudents(runPreset(activePreset, students, newBuckets, mergeGroups, normParams, meanMandate));
       }
     },
-    [activePreset, students, mergeGroups, normParams],
+    [activePreset, students, mergeGroups, normParams, meanMandate],
+  );
+
+  // Changing the mean rule re-runs whichever preset is showing.
+  const handleMeanMandateChange = useCallback(
+    (mandate: MeanMandate) => {
+      setMeanMandate(mandate);
+      if (
+        activePreset &&
+        students.length > 0 &&
+        (activePreset === "easynorm" || validateBuckets(buckets, mergeGroups).length === 0)
+      ) {
+        setStudents(runPreset(activePreset, students, buckets, mergeGroups, normParams, mandate));
+      }
+    },
+    [activePreset, students, buckets, mergeGroups, normParams],
   );
 
   const handlePreset = useCallback(
     (preset: DistributionPreset) => {
       if (students.length === 0) return;
       if (preset !== "easynorm" && !isFeasible) return;
-      setStudents(runPreset(preset, students, buckets, mergeGroups, normParams));
+      setStudents(runPreset(preset, students, buckets, mergeGroups, normParams, meanMandate));
       setActivePreset(preset);
     },
-    [students, buckets, isFeasible, mergeGroups, normParams],
+    [students, buckets, isFeasible, mergeGroups, normParams, meanMandate],
   );
 
   // Editing the target mean/SD re-curves immediately and selects Easynorm.
@@ -108,10 +122,10 @@ export default function Home() {
     (params: NormParams) => {
       setNormParams(params);
       if (students.length === 0) return;
-      setStudents(distributeEasynorm(students, params));
+      setStudents(distributeEasynorm(students, params, meanMandate));
       setActivePreset("easynorm");
     },
-    [students],
+    [students, meanMandate],
   );
 
   // Grade change with rank-order cascade:
@@ -140,7 +154,8 @@ export default function Home() {
     setBuckets(DEFAULT_BUCKETS);
     setMergeGroups(DEFAULT_MERGE_GROUPS);
     setNormParams(DEFAULT_NORM_PARAMS);
-    setStudents(distributeEasynorm(makeDefaultStudents(), DEFAULT_NORM_PARAMS));
+    setMeanMandate(DEFAULT_MEAN_MANDATE);
+    setStudents(distributeEasynorm(makeDefaultStudents(), DEFAULT_NORM_PARAMS, DEFAULT_MEAN_MANDATE));
     setActivePreset("easynorm");
   }, []);
 
@@ -300,6 +315,8 @@ export default function Home() {
             onMerge={handleMerge}
             onSplit={handleSplit}
             onGroupTotalChange={handleGroupTotalChange}
+            meanMandate={meanMandate}
+            onMeanMandateChange={handleMeanMandateChange}
           />
         </aside>
 
@@ -331,6 +348,7 @@ export default function Home() {
             students={students}
             buckets={buckets}
             mergeGroups={mergeGroups}
+            meanMandate={meanMandate}
             onPreset={handlePreset}
             activePreset={activePreset}
             normParams={normParams}

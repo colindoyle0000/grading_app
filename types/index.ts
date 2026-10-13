@@ -19,18 +19,18 @@ export type BucketConstraints = GradeBucket & {
 
 export type SlotUsage = Record<string, number>;
 
-export type DistributionPreset = "generous" | "stingy" | "condensed" | "spread" | "easynorm";
+export type DistributionPreset = "generous" | "stingy" | "easynorm";
 
+// A rule on the class mean of the numeric scores (0–100 scale), applied to every preset.
 export type MeanMandate = {
   enabled: boolean;
-  min: number; // lowest allowed class mean of the curved scores (0–100 scale)
-  max: number; // highest allowed class mean of the curved scores (0–100 scale)
+  min: number; // lowest allowed class mean
+  max: number; // highest allowed class mean
 };
 
 export type NormParams = {
   mean: number; // target mean of the curved scores (0–100 scale)
   sd: number;   // target standard deviation of the curved scores
-  meanMandate: MeanMandate; // forces the class mean of the curved scores into [min, max]
 };
 
 export type MergeField = "min" | "max";
