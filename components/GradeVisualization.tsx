@@ -7,11 +7,11 @@ import { buildConstraints } from "@/lib/algorithms";
 
 // ─── SVG constants ────────────────────────────────────────────────────────────
 const SVG_W = 1000;
-const SVG_H = 500;
+const SVG_H = 530;
 const ML = 50;   // margin left  (Y-axis)
 const MT = 20;   // margin top
 const MR = 15;   // margin right
-const MB = 40;   // margin bottom (X-axis labels)
+const MB = 70;   // margin bottom (X-axis labels + arrow buttons)
 const CHART_W = SVG_W - ML - MR;       // 935
 const CHART_H = SVG_H - MT - MB;       // 440
 const CHART_BOTTOM = MT + CHART_H;     // 460
@@ -90,6 +90,27 @@ function applyDrag(
   const dstGrade = GRADE_SCALE[dstGradeIdx];
   return students.map((s) =>
     moveIds.has(s.id) ? { ...s, assignedGrade: dstGrade } : s,
+  );
+}
+
+// Move one student between adjacent columns. "up" sends the best-ranked student
+// of the source grade to the next higher grade; "down" sends the worst-ranked
+// one to the next lower grade.
+function nudgeStudent(
+  students: Student[],
+  srcGradeIdx: number,
+  dstGradeIdx: number,
+  direction: "up" | "down",
+): Student[] {
+  const srcGrade = GRADE_SCALE[srcGradeIdx];
+  const col = students
+    .filter((s) => s.assignedGrade === srcGrade)
+    .sort((a, b) => a.rank - b.rank);
+  if (!col.length) return students;
+  const mover = direction === "up" ? col[0] : col[col.length - 1];
+  const dstGrade = GRADE_SCALE[dstGradeIdx];
+  return students.map((s) =>
+    s.id === mover.id ? { ...s, assignedGrade: dstGrade } : s,
   );
 }
 
@@ -304,12 +325,12 @@ export function GradeVisualization({ students, buckets, mergeGroups, onStudentsC
           <span>Student</span>
         </div>
         <span className="ml-auto shrink-0">
-          {hasGrades ? "Drag circles to reassign grades" : "Apply a preset to assign grades"}
+          {hasGrades ? "Drag circles or use the arrows to reassign grades" : "Apply a preset to assign grades"}
         </span>
       </div>
 
       {/* Chart */}
-      <div style={{ height: 320, overflow: "hidden" }}>
+      <div style={{ height: 340, overflow: "hidden" }}>
         <svg
           ref={svgRef}
           viewBox={`0 0 ${SVG_W} ${SVG_H}`}
@@ -535,7 +556,7 @@ export function GradeVisualization({ students, buckets, mergeGroups, onStudentsC
               <text
                 key={grade}
                 x={colCenterX(visCol)}
-                y={SVG_H - 8}
+                y={CHART_BOTTOM + 18}
                 textAnchor="middle"
                 fontSize={11}
                 fill={active ? "#3b82f6" : "#374151"}
@@ -545,6 +566,71 @@ export function GradeVisualization({ students, buckets, mergeGroups, onStudentsC
               </text>
             );
           })}
+
+          {/* ── Layer 7: Per-bar arrow buttons ──
+              Left: push this bar's top grade up to the next higher bar.
+              Right: push this bar's bottom grade down to the next lower bar. */}
+          {!drag &&
+            visibleGradeIndices.map((gradeIdx, visCol) => {
+              const count = columnStudents[gradeIdx].length;
+              const higher = visibleGradeIndices[visCol - 1];
+              const lower = visibleGradeIndices[visCol + 1];
+              const canLeft = count > 0 && higher !== undefined;
+              const canRight = count > 0 && lower !== undefined;
+              const cx = colCenterX(visCol);
+              const by = CHART_BOTTOM + 28;
+              const BW = Math.min(26, COL_W * 0.4);
+              const BH = 22;
+              const btn = (
+                dir: "up" | "down",
+                x: number,
+                enabled: boolean,
+                dst: number | undefined,
+              ) => (
+                <g
+                  key={dir}
+                  role="button"
+                  aria-label={`${GRADE_SCALE[gradeIdx]}: move ${
+                    dir === "up" ? "top" : "bottom"
+                  } student ${dir === "up" ? "to higher" : "to lower"} grade`}
+                  aria-disabled={!enabled}
+                  style={{ cursor: enabled ? "pointer" : "default" }}
+                  opacity={enabled ? 1 : 0.3}
+                  onClick={() => {
+                    if (enabled && dst !== undefined)
+                      onStudentsChange(nudgeStudent(students, gradeIdx, dst, dir));
+                  }}
+                >
+                  <rect
+                    x={x}
+                    y={by}
+                    width={BW}
+                    height={BH}
+                    rx={4}
+                    fill="#f3f4f6"
+                    stroke="#d1d5db"
+                  />
+                  <path
+                    d={
+                      dir === "up"
+                        ? `M ${x + BW / 2 + 3} ${by + 5} L ${x + BW / 2 - 3} ${by + BH / 2} L ${x + BW / 2 + 3} ${by + BH - 5}`
+                        : `M ${x + BW / 2 - 3} ${by + 5} L ${x + BW / 2 + 3} ${by + BH / 2} L ${x + BW / 2 - 3} ${by + BH - 5}`
+                    }
+                    fill="none"
+                    stroke="#374151"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </g>
+              );
+              return (
+                <g key={`nudge-${gradeIdx}`}>
+                  {btn("up", cx - BW - 2, canLeft, higher)}
+                  {btn("down", cx + 2, canRight, lower)}
+                </g>
+              );
+            })}
         </svg>
       </div>
     </div>
