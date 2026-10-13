@@ -323,21 +323,63 @@ export function BucketRules({
           </span>
         </label>
         {meanMandate.enabled && (
-          <div className="flex items-center justify-between gap-2 pt-1.5">
-            <NormField
-              label="Min"
-              value={meanMandate.min}
-              min={0}
-              max={meanMandate.max}
-              onCommit={(min) => onMeanMandateChange({ ...meanMandate, min })}
-            />
-            <NormField
-              label="Max"
-              value={meanMandate.max}
-              min={meanMandate.min}
-              max={100}
-              onCommit={(max) => onMeanMandateChange({ ...meanMandate, max })}
-            />
+          <div className="space-y-1.5 pt-1.5">
+            <div className="flex rounded border border-input overflow-hidden text-xs" role="group" aria-label="Mandate unit">
+              {(["score", "gpa"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={meanMandate.mode === mode}
+                  onClick={() => onMeanMandateChange({ ...meanMandate, mode })}
+                  className={`flex-1 px-2 py-1 transition-colors ${
+                    meanMandate.mode === mode
+                      ? "bg-primary text-primary-foreground"
+                      : "hover:bg-accent hover:text-accent-foreground"
+                  }`}
+                >
+                  {mode === "score" ? "Score (0–100)" : "GPA"}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              {meanMandate.mode === "gpa" ? (
+                <>
+                  <NormField
+                    label="Min"
+                    value={meanMandate.gpaMin}
+                    min={0}
+                    max={meanMandate.gpaMax}
+                    step={0.05}
+                    onCommit={(gpaMin) => onMeanMandateChange({ ...meanMandate, gpaMin })}
+                  />
+                  <NormField
+                    label="Max"
+                    value={meanMandate.gpaMax}
+                    min={meanMandate.gpaMin}
+                    max={4.333}
+                    step={0.05}
+                    onCommit={(gpaMax) => onMeanMandateChange({ ...meanMandate, gpaMax })}
+                  />
+                </>
+              ) : (
+                <>
+                  <NormField
+                    label="Min"
+                    value={meanMandate.min}
+                    min={0}
+                    max={meanMandate.max}
+                    onCommit={(min) => onMeanMandateChange({ ...meanMandate, min })}
+                  />
+                  <NormField
+                    label="Max"
+                    value={meanMandate.max}
+                    min={meanMandate.min}
+                    max={100}
+                    onCommit={(max) => onMeanMandateChange({ ...meanMandate, max })}
+                  />
+                </>
+              )}
+            </div>
           </div>
         )}
       </div>

@@ -26,6 +26,13 @@ function computeEffectiveSumMaxPct(buckets: GradeBucket[], mergeGroups: MergeGro
   return sum;
 }
 
+/** The mandate's allowed range in whichever unit its mode measures. */
+export function mandateRange(mandate: MeanMandate): { min: number; max: number } {
+  return mandate.mode === "gpa"
+    ? { min: mandate.gpaMin, max: mandate.gpaMax }
+    : { min: mandate.min, max: mandate.max };
+}
+
 /**
  * Core allocator: given constraints and N students, returns how many go in each
  * bucket (parallel array to constraints). Returns null if infeasible.
@@ -90,7 +97,9 @@ function allocate(
     return Math.min(c.maxCount, groupTotalCounts[c.grade] - groupAlloc);
   }
 
-  const score = constraints.map((c) => GRADE_SCORE[c.grade] ?? 0);
+  const valueOf = mandate?.mode === "gpa" ? GPA_MAP : GRADE_SCORE;
+  const score = constraints.map((c) => valueOf[c.grade] ?? 0);
+  const range = mandate ? mandateRange(mandate) : { min: 0, max: 0 };
   const byScoreAsc = constraints.map((_, i) => i).sort((a, b) => score[a] - score[b]);
   const byScoreDesc = [...byScoreAsc].reverse();
 
@@ -114,7 +123,7 @@ function allocate(
     const low = totalIfFilled(base, open, byScoreAsc, left);
     const high = totalIfFilled(base, open, byScoreDesc, left);
     if (low === null || high === null) return false;
-    return low <= mandate.max * n && high >= mandate.min * n;
+    return low <= range.max * n && high >= range.min * n;
   }
 
   let activeMandate = mandate?.enabled ? mandate : undefined;
@@ -307,7 +316,7 @@ export function distributeEasynorm(
     i = j + 1;
   }
 
-  const shift = meanMandateShift(curved, mandate);
+  const shift = mandate?.mode === "gpa" ? gpaMandateShift(curved, mandate) : meanMandateShift(curved, mandate);
   return sorted.map((s, k) => {
     const curvedScore = curved[k] + shift;
     return { ...s, curvedScore, assignedGrade: normalizedScoreToGrade(curvedScore) };
@@ -321,6 +330,38 @@ function meanMandateShift(scores: number[], mandate: MeanMandate | undefined): n
   if (mean < mandate.min) return mandate.min - mean;
   if (mean > mandate.max) return mandate.max - mean;
   return 0;
+}
+
+/**
+ * Shift for a GPA mandate. The GPA of the letters is a step function of the
+ * shift (a score only changes letter when it crosses a cutoff), so instead of
+ * solving for a shift we try every one at which some score lands exactly on a
+ * cutoff, plus 0, and keep the smallest shift whose GPA mean is in range.
+ * If no shift lands in range (one step jumps over the whole range), the closest
+ * mean wins and checkViolations reports the miss.
+ */
+function gpaMandateShift(scores: number[], mandate: MeanMandate): number {
+  if (!mandate.enabled || scores.length === 0) return 0;
+  const { min, max } = mandateRange(mandate);
+  const gpaMeanAt = (shift: number) =>
+    scores.reduce((sum, s) => sum + (GPA_MAP[normalizedScoreToGrade(s + shift)] ?? 0), 0) / scores.length;
+  const miss = (mean: number) => (mean < min ? min - mean : mean > max ? mean - max : 0);
+
+  // Math.round(x) >= cutoff exactly when x >= cutoff - 0.5; the epsilon keeps float noise on the right side.
+  const candidates = new Set<number>([0]);
+  for (const [cutoff] of EASYNORM_CUTOFFS) {
+    for (const s of scores) candidates.add(cutoff - 0.5 - s + 1e-9);
+  }
+  let best = 0;
+  let bestMiss = miss(gpaMeanAt(0));
+  for (const shift of candidates) {
+    const m = miss(gpaMeanAt(shift));
+    if (m < bestMiss - 1e-9 || (Math.abs(m - bestMiss) <= 1e-9 && Math.abs(shift) < Math.abs(best))) {
+      best = shift;
+      bestMiss = m;
+    }
+  }
+  return best;
 }
 
 /**
@@ -513,13 +554,12 @@ export function checkViolations(
   // Class-mean mandate. Compare at display precision so a mean sitting exactly
   // on a bound (e.g. after the Easynorm shift) never trips on float noise.
   if (mandate?.enabled) {
-    const mean = Math.round(computeMeanScore(students) * 100) / 100;
-    if (mean < mandate.min) {
-      violations.push(`Class mean below minimum (${mean.toFixed(2)}/${mandate.min})`);
-    }
-    if (mean > mandate.max) {
-      violations.push(`Class mean above maximum (${mean.toFixed(2)}/${mandate.max})`);
-    }
+    const { min, max } = mandateRange(mandate);
+    const isGpa = mandate.mode === "gpa";
+    const mean = Math.round((isGpa ? computeMean(students) : computeMeanScore(students)) * 100) / 100;
+    const label = isGpa ? "Class GPA" : "Class mean";
+    if (mean < min) violations.push(`${label} below minimum (${mean.toFixed(2)}/${min})`);
+    if (mean > max) violations.push(`${label} above maximum (${mean.toFixed(2)}/${max})`);
   }
 
   return violations;

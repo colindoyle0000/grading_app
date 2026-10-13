@@ -21,11 +21,18 @@ export type SlotUsage = Record<string, number>;
 
 export type DistributionPreset = "generous" | "stingy" | "easynorm";
 
-// A rule on the class mean of the numeric scores (0–100 scale), applied to every preset.
+// How a mean mandate measures the class: the 0–100 numeric score, or the GPA of the letters.
+export type MandateMode = "score" | "gpa";
+
+// A rule on the class mean, applied to every preset. The score range and the
+// GPA range are kept separately so switching modes doesn't lose either one.
 export type MeanMandate = {
   enabled: boolean;
-  min: number; // lowest allowed class mean
-  max: number; // highest allowed class mean
+  mode: MandateMode;
+  min: number;    // lowest allowed class mean score (0–100 scale)
+  max: number;    // highest allowed class mean score
+  gpaMin: number; // lowest allowed class mean GPA
+  gpaMax: number; // highest allowed class mean GPA
 };
 
 export type NormParams = {

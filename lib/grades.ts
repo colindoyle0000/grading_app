@@ -52,7 +52,14 @@ export const DEFAULT_MERGE_GROUPS: MergeGroup[] = [
 
 export const DEFAULT_NORM_PARAMS: NormParams = { mean: 81, sd: 6 };
 
-export const DEFAULT_MEAN_MANDATE: MeanMandate = { enabled: true, min: 80, max: 82 };
+export const DEFAULT_MEAN_MANDATE: MeanMandate = {
+  enabled: true,
+  mode: "score",
+  min: 80,
+  max: 82,
+  gpaMin: 3.0,
+  gpaMax: 3.3,
+};
 
 /**
  * Representative 0–100 score for each letter: the midpoint of its band on the

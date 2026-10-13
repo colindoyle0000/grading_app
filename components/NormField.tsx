@@ -11,12 +11,14 @@ export function NormField({
   value,
   min,
   max,
+  step = 0.5,
   onCommit,
 }: {
   label: string;
   value: number;
   min: number;
   max: number;
+  step?: number;
   onCommit: (v: number) => void;
 }) {
   const [draft, setDraft] = useState(String(value));
@@ -36,7 +38,7 @@ export function NormField({
         type="number"
         min={min}
         max={max}
-        step={0.5}
+        step={step}
         value={draft}
         onChange={(e) => {
           setDraft(e.target.value);
